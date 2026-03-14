@@ -6,7 +6,69 @@ satisfy them correctly (using runtime_checkable).
 
 import numpy as np
 
-from mj_manipulator.protocols import Gripper, GraspSource, IKSolver
+from mj_manipulator.protocols import (
+    ArmController,
+    ExecutionContext,
+    GraspSource,
+    Gripper,
+    IKSolver,
+)
+
+
+class MockArmController:
+    """Minimal arm controller for protocol testing.
+
+    Simulates the grasp/release lifecycle that both SimArmController
+    and a future HardwareArmController would implement.
+    """
+
+    def __init__(self):
+        self._grasped = None
+
+    def grasp(self, object_name: str) -> str | None:
+        self._grasped = object_name
+        return object_name
+
+    def release(self, object_name: str | None = None) -> None:
+        self._grasped = None
+
+
+class MockExecutionContext:
+    """Minimal execution context for protocol testing.
+
+    Demonstrates the interface that both SimContext (MuJoCo) and
+    HardwareContext (real robot) must implement.
+    """
+
+    def __init__(self):
+        self._running = True
+        self._executed = []
+        self._arms = {"test_arm": MockArmController()}
+        self._last_step_targets = None
+        self._last_cartesian = None
+
+    def execute(self, item) -> bool:
+        self._executed.append(item)
+        return True
+
+    def step(self, targets=None) -> None:
+        self._last_step_targets = targets
+
+    def step_cartesian(self, arm_name, position, velocity=None) -> None:
+        self._last_cartesian = (arm_name, position, velocity)
+
+    def sync(self) -> None:
+        pass
+
+    def is_running(self) -> bool:
+        return self._running
+
+    def arm(self, name: str) -> MockArmController:
+        return self._arms[name]
+
+    @property
+    def control_dt(self) -> float:
+        return 0.002  # 500Hz, typical for UR RTDE
 
 
 class MockGripper:
@@ -155,3 +217,105 @@ class TestGraspSourceProtocol:
         source = MockGraspSource()
         destinations = source.get_place_destinations("mug")
         assert "table" in destinations
+
+
+class TestExecutionContextProtocol:
+    """Tests for the ExecutionContext protocol — the sim-to-real bridge."""
+
+    def test_mock_satisfies_protocol(self):
+        """MockExecutionContext satisfies the ExecutionContext protocol."""
+        ctx = MockExecutionContext()
+        assert isinstance(ctx, ExecutionContext)
+
+    def test_execute_returns_bool(self):
+        """execute() returns success/failure."""
+        ctx = MockExecutionContext()
+        assert ctx.execute("fake_trajectory") is True
+        assert len(ctx._executed) == 1
+
+    def test_step_accepts_targets(self):
+        """step() accepts joint targets dict."""
+        ctx = MockExecutionContext()
+        targets = {"test_arm": np.array([0.1, 0.2, 0.3])}
+        ctx.step(targets)
+        assert ctx._last_step_targets is targets
+
+    def test_step_no_targets_holds_position(self):
+        """step(None) means hold all arms at current position."""
+        ctx = MockExecutionContext()
+        ctx.step(None)
+        assert ctx._last_step_targets is None
+
+    def test_step_cartesian(self):
+        """step_cartesian() accepts position + optional velocity."""
+        ctx = MockExecutionContext()
+        pos = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+        vel = np.array([0.01, 0.02, 0.03, 0.04, 0.05, 0.06])
+        ctx.step_cartesian("test_arm", pos, vel)
+        assert ctx._last_cartesian[0] == "test_arm"
+        np.testing.assert_array_equal(ctx._last_cartesian[1], pos)
+        np.testing.assert_array_equal(ctx._last_cartesian[2], vel)
+
+    def test_is_running(self):
+        """is_running() reflects context state."""
+        ctx = MockExecutionContext()
+        assert ctx.is_running()
+        ctx._running = False
+        assert not ctx.is_running()
+
+    def test_control_dt(self):
+        """control_dt is accessible."""
+        ctx = MockExecutionContext()
+        assert ctx.control_dt == 0.002
+
+    def test_arm_returns_controller(self):
+        """arm() returns an ArmController."""
+        ctx = MockExecutionContext()
+        controller = ctx.arm("test_arm")
+        assert isinstance(controller, ArmController)
+
+
+class TestArmControllerProtocol:
+    """Tests for the ArmController protocol."""
+
+    def test_mock_satisfies_protocol(self):
+        """MockArmController satisfies the ArmController protocol."""
+        ctrl = MockArmController()
+        assert isinstance(ctrl, ArmController)
+
+    def test_grasp_release_lifecycle(self):
+        """Grasp/release lifecycle works through the protocol."""
+        ctrl = MockArmController()
+        assert ctrl._grasped is None
+
+        result = ctrl.grasp("mug")
+        assert result == "mug"
+        assert ctrl._grasped == "mug"
+
+        ctrl.release("mug")
+        assert ctrl._grasped is None
+
+    def test_same_code_sim_and_hardware(self):
+        """Demonstrate that caller code is identical regardless of backend.
+
+        This is the key insight: primitives and policies interact only with
+        the ExecutionContext protocol. The same function works for sim and
+        real hardware.
+        """
+
+        def execute_pick(ctx: ExecutionContext, arm_name: str, object_name: str):
+            """Example primitive that works in sim or on real hardware."""
+            # Plan and execute approach (trajectory would come from planner)
+            ctx.execute("approach_trajectory")
+            # Grasp
+            result = ctx.arm(arm_name).grasp(object_name)
+            # Execute lift
+            if result is not None:
+                ctx.execute("lift_trajectory")
+            return result
+
+        # Works with mock (stands in for SimContext or HardwareContext)
+        ctx = MockExecutionContext()
+        result = execute_pick(ctx, "test_arm", "can")
+        assert result == "can"
+        assert len(ctx._executed) == 2  # approach + lift

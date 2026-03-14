@@ -6,12 +6,52 @@ Geodude (10,508 lines) mixes generic MuJoCo arm control with UR5e/Robotiq-specif
 
 **Geodude becomes a thin robot configuration package** (~2,000 lines) that plugs UR5e + Robotiq + Vention into the generic framework.
 
+## Core Insight: ExecutionContext as the Sim-to-Real Bridge
+
+The central abstraction is `ExecutionContext` — a protocol that unifies simulation and hardware execution. All planning, primitives, cartesian control, and policies interact with the robot **exclusively** through this interface. Whether the implementation talks to MuJoCo or to real hardware is invisible to the caller.
+
+```python
+# The SAME code works in simulation and on real hardware:
+
+# Simulation
+with SimContext(env, arms={"franka": arm}, physics=True) as ctx:
+    result = arm.plan_to_pose(target)
+    ctx.execute(result)
+    ctx.arm("franka").grasp("mug")
+
+# Real robot — identical calling convention
+with FrankaHardwareContext(robot_ip="192.168.1.1", arms={"franka": arm}) as ctx:
+    result = arm.plan_to_pose(target)
+    ctx.execute(result)
+    ctx.arm("franka").grasp("mug")
+```
+
+The context provides three execution patterns:
+
+1. **Batch trajectory execution** (plan → execute):
+   `ctx.execute(result)` — runs pre-planned trajectories
+2. **Streaming joint control** (policies):
+   `ctx.step({"franka": q_target})` — one control cycle with joint targets
+3. **Streaming cartesian control** (teleop, force-guided motion):
+   `ctx.step_cartesian("franka", q_new, qd_new)` — reactive step with velocity feedforward
+
+Each method has a clear meaning in every backend:
+
+| Method | MuJoCo Kinematic | MuJoCo Physics | Real Hardware |
+|---|---|---|---|
+| `execute()` | Set qpos per waypoint | PD tracking with mj_step | Stream to trajectory controller |
+| `step()` | Set qpos directly | Set target + mj_step | Send joint command, wait 1 cycle |
+| `step_cartesian()` | Set qpos directly | Reactive lookahead + mj_step | Stream to low-level controller |
+| `sync()` | mj_forward + viewer | mj_forward + viewer | Read sensors |
+| `arm().grasp()` | Kinematic close + weld | Physics close + weld | Gripper close + feedback |
+
 ## Design Decisions (confirmed with user)
 
+- **ExecutionContext is the central protocol** — all primitives, policies, and control loops depend only on this interface, never on SimContext directly. This is what makes sim-to-real seamless.
 - **Depends on mj_environment** — forking is key for thread-safe planning and already well-implemented
 - **Arm is concrete + injection** — one `Arm` class parameterized by config, injected IK solver, injected Gripper. No subclassing.
 - **Primitives move to mj_manipulator** — with a `GraspSource` protocol so any robot that can provide grasps gets pickup/place
-- **Execution context is generic** — `PhysicsController` and `SimContext` move to mj_manipulator, parameterized by arm/gripper registry instead of hardcoded "left"/"right"
+- **SimContext is one implementation** — mj_manipulator ships `SimContext` (kinematic + physics modes). Robot-specific packages provide `HardwareContext`.
 
 ## Package Structure
 
@@ -20,27 +60,54 @@ mj_manipulator/
   pyproject.toml
   src/mj_manipulator/
     __init__.py
-    protocols.py        # Gripper, GraspSource, IKSolver protocols
+    protocols.py        # ExecutionContext, ArmController, Gripper, IKSolver, GraspSource
     config.py           # ArmConfig, KinematicLimits, PlanningDefaults, PhysicsConfig
+    trajectory.py       # Trajectory + TOPP-RA + linear trajectory
+    planning.py         # PlanResult dataclass
     arm.py              # Generic Arm (FK, IK, planning, execution)
     adapters.py         # pycbirrt RobotModel/IKSolver/CollisionChecker adapters
     collision.py        # Unified grasp-aware CollisionChecker
     grasp_manager.py    # GraspManager + detect_grasped_object
-    gripper.py          # Gripper base utilities (protocol is in protocols.py)
-    trajectory.py       # Trajectory + TOPP-RA + linear trajectory
     cartesian.py        # QP solver, twist control, move_until_touch, execute_twist
-    executor.py         # KinematicExecutor, PhysicsExecutor
-    controller.py       # PhysicsController (generic multi-arm physics stepping)
-    context.py          # SimContext (generic execution context: physics/kinematic modes)
-    primitives.py       # pickup/place via GraspSource protocol
-    planning.py         # PlanResult dataclass
+    executor.py         # KinematicExecutor, PhysicsExecutor (sim-specific)
+    controller.py       # PhysicsController (sim-specific, multi-arm physics stepping)
+    context.py          # SimContext — the simulation implementation of ExecutionContext
+    primitives.py       # pickup/place (depend on ExecutionContext, not SimContext)
   tests/
     ...
 ```
 
+**Key dependency rule**: `primitives.py`, `cartesian.py`, and any policy code depend only on `ExecutionContext` (the protocol), never on `SimContext` (the implementation). This is what makes real robot execution possible without changing any manipulation logic.
+
 ## Core Protocols
 
-### `protocols.py`
+### `ExecutionContext` — the sim-to-real bridge
+
+```python
+class ExecutionContext(Protocol):
+    """Unified interface for robot execution (sim or real hardware)."""
+    def execute(self, item: Trajectory | PlanResult) -> bool: ...
+    def step(self, targets: dict[str, np.ndarray] | None = None) -> None: ...
+    def step_cartesian(self, arm_name: str, position: np.ndarray,
+                       velocity: np.ndarray | None = None) -> None: ...
+    def sync(self) -> None: ...
+    def is_running(self) -> bool: ...
+    def arm(self, name: str) -> ArmController: ...
+    control_dt: float  # property
+```
+
+### `ArmController` — per-arm grasp/release within a context
+
+```python
+class ArmController(Protocol):
+    """Combines gripper actuation with grasp-manager bookkeeping."""
+    def grasp(self, object_name: str) -> str | None: ...
+    def release(self, object_name: str | None = None) -> None: ...
+```
+
+The grasp/release methods handle the **full pipeline**: actuate gripper, detect contact, update grasp manager (weld creation, collision-group updates). Whether this means physics simulation or real gripper feedback is invisible to the caller.
+
+### `Gripper` — low-level gripper hardware
 
 ```python
 class Gripper(Protocol):
@@ -58,7 +125,11 @@ class Gripper(Protocol):
     is_holding: bool
     held_object: str | None
     def set_candidate_objects(self, objects: list[str] | None) -> None: ...
+```
 
+### `GraspSource` and `IKSolver`
+
+```python
 class GraspSource(Protocol):
     """Provides grasps/placements for objects. Geodude's AffordanceRegistry implements this."""
     def get_grasps(self, object_name: str, hand_type: str) -> list[TSR]: ...
@@ -86,15 +157,15 @@ This is the body that objects weld to during kinematic grasping. Currently hardc
 | `planning.py` (58) | `planning.py` | Verbatim |
 | `grasp_manager.py` (353) | `grasp_manager.py` | Parameterize finger detection |
 | `collision.py` (652) | `collision.py` | Unify 3 classes → 1 (per #62) |
-| `cartesian.py` (988) | `cartesian.py` | Replace `robot._active_context` with `step_fn` param |
+| `cartesian.py` (988) | `cartesian.py` | Replace `robot._active_context` with `context: ExecutionContext` param |
 | `arm.py` generic parts (~800) | `arm.py` | FK, joint control, planning, execution |
 | `arm.py` adapters (~200) | `adapters.py` | ArmRobotModel, ContextRobotModel, SimpleIKSolver |
 | `executor.py` executors (~300) | `executor.py` | KinematicExecutor, PhysicsExecutor |
 | `executor.py` controller (~600) | `controller.py` | Generalize RobotPhysicsController (dict of arms, not "left"/"right") |
-| `execution.py` context (~400) | `context.py` | Generalize SimContext (arm registry, not hardcoded sides) |
-| `primitives.py` (~843) | `primitives.py` | Use GraspSource protocol instead of AffordanceRegistry directly |
+| `execution.py` context (~400) | `context.py` | SimContext implements ExecutionContext protocol (arm registry, not hardcoded sides) |
+| `primitives.py` (~843) | `primitives.py` | Depend on ExecutionContext protocol, use GraspSource for grasps |
 | `config.py` generic parts (~400) | `config.py` | KinematicLimits, PlanningDefaults, ArmConfig, PhysicsConfig |
-| NEW | `protocols.py` | Gripper, GraspSource, IKSolver protocols |
+| NEW | `protocols.py` | ExecutionContext, ArmController, Gripper, GraspSource, IKSolver protocols |
 
 ### Stays in geodude
 
@@ -163,6 +234,9 @@ class Geodude:
 ```python
 # franka_control/robot.py
 from mj_manipulator import Arm, GraspManager, ArmConfig, KinematicLimits
+from mj_manipulator.context import SimContext
+from mj_manipulator.primitives import pickup
+from mj_manipulator.cartesian import execute_twist
 
 franka_config = ArmConfig(
     name="franka", entity_type="arm",
@@ -182,25 +256,34 @@ gripper = FrankaHand(env, franka_config, grasp_manager)  # implements Gripper pr
 arm = Arm(env=env, config=franka_config, grasp_manager=grasp_manager,
           gripper=gripper, ik_solver=FrankaIK(env), name="franka")
 
-# All of these work immediately:
-arm.get_ee_pose()
-arm.plan_to_pose(target)
-arm.plan_to_tsr(grasp_tsr)
-
-# Cartesian teleop:
-from mj_manipulator.cartesian import execute_twist
-execute_twist(arm, twist, step_fn=ctx.step_cartesian, control_dt=ctx.control_dt)
-
-# Run a joint policy:
+# --- Simulation (MuJoCo) ---
 with SimContext(env, arms={"franka": arm}, physics=True) as ctx:
-    while not done:
+    # Plan + execute trajectory
+    result = arm.plan_to_pose(target)
+    ctx.execute(result)
+
+    # Cartesian teleop
+    execute_twist(arm, twist, context=ctx)
+
+    # Run a joint policy
+    while ctx.is_running():
         q_target = policy(arm.get_joint_positions())
         ctx.step({"franka": q_target})
 
-# Pickup/place:
-from mj_manipulator.primitives import pickup
-pickup(arm, "mug", grasp_source=my_grasp_source, context=ctx)
+    # Pickup (uses ExecutionContext protocol internally)
+    pickup(arm, "mug", grasp_source=my_grasp_source, context=ctx)
+
+# --- Real robot (IDENTICAL calling convention) ---
+with FrankaHardwareContext(robot_ip="192.168.1.1", arms={"franka": arm}) as ctx:
+    result = arm.plan_to_pose(target)
+    ctx.execute(result)
+
+    execute_twist(arm, twist, context=ctx)  # Same function, real robot
+
+    pickup(arm, "mug", grasp_source=my_grasp_source, context=ctx)  # Same function
 ```
+
+Notice that `pickup()`, `execute_twist()`, and the policy loop are **identical** — only the context constructor changes between sim and real.
 
 ## Kinematic Grasp Pipeline (critical for correctness)
 
@@ -236,10 +319,16 @@ class PhysicsController:
     def open_gripper(self, arm_name: str) -> None: ...
 ```
 
-## SimContext (generalized)
+## SimContext (implements ExecutionContext for MuJoCo)
 
 ```python
 class SimContext:
+    """Simulation implementation of ExecutionContext.
+
+    Supports two modes:
+    - Kinematic: perfect tracking, no physics (fast for planning visualization)
+    - Physics: MuJoCo physics stepping with PD control (realistic execution)
+    """
     def __init__(self, env, arms: dict[str, Arm],
                  physics: bool = False, viewer: bool = True,
                  physics_config: PhysicsConfig | None = None): ...
@@ -247,13 +336,49 @@ class SimContext:
 
 Takes `arms: dict[str, Arm]` instead of assuming `robot.left_arm`/`robot.right_arm`. Camera setup becomes optional/configurable rather than hardcoded Geodude angles.
 
+## HardwareContext (robot-specific packages provide this)
+
+```python
+# Example: geodude provides UR5e hardware context
+class UR5eHardwareContext:
+    """Hardware implementation of ExecutionContext for UR5e via RTDE.
+
+    Same interface as SimContext — all primitives and policies work unchanged.
+    """
+    def __init__(self, robot_ip: str, arms: dict[str, Arm],
+                 control_rate: float = 500.0): ...
+
+    def execute(self, item) -> bool:
+        # Stream trajectory to UR RTDE servoj interface
+        ...
+
+    def step(self, targets=None) -> None:
+        # Send joint command via RTDE, wait one control cycle
+        ...
+
+    def step_cartesian(self, arm_name, position, velocity=None) -> None:
+        # Stream to RTDE speedj or servoj with small lookahead
+        ...
+
+    def sync(self) -> None:
+        # Read joint encoders, F/T sensors, gripper state via RTDE
+        ...
+
+    def arm(self, name) -> HardwareArmController:
+        # Returns controller that talks to Robotiq gripper via Modbus
+        ...
+```
+
+**The key**: primitives like `pickup()` take `context: ExecutionContext` (the protocol), so they work with both `SimContext` and `UR5eHardwareContext` without any code changes.
+
 ## Migration Strategy (incremental, never breaks geodude)
 
-### Phase 1: Scaffold + pure data types
+### Phase 1: Scaffold + pure data types + core protocols ✅
 - Create `mj_manipulator/` with pyproject.toml
-- Move: `trajectory.py`, `planning.py`, `config.py` (generic parts), `protocols.py` (new)
-- Geodude re-exports from mj_manipulator (shims)
-- **Test**: `uv run pytest tests/ -v` in geodude passes
+- Move: `trajectory.py`, `planning.py`, `config.py` (generic parts)
+- New: `protocols.py` with **ExecutionContext**, **ArmController**, Gripper, IKSolver, GraspSource
+- ExecutionContext protocol defined early so all subsequent phases depend on the protocol, not implementations
+- **Test**: 51 tests passing, including mock ExecutionContext/ArmController tests demonstrating the sim-to-real pattern
 
 ### Phase 2: Grasp management + collision
 - Move: `grasp_manager.py`, unified `collision.py` (does #62 during extraction)
@@ -262,7 +387,8 @@ Takes `arms: dict[str, Arm]` instead of assuming `robot.left_arm`/`robot.right_a
 
 ### Phase 3: Executors + cartesian control
 - Move: `KinematicExecutor`, `PhysicsExecutor`, cartesian functions
-- Break `arm.robot._active_context` dependency (step_fn parameter)
+- Break `arm.robot._active_context` dependency → functions take `context: ExecutionContext`
+- All cartesian functions depend on the protocol, not SimContext
 - Add thin compat wrappers in geodude during transition
 - **Test**: geodude tests pass
 
@@ -271,15 +397,17 @@ Takes `arms: dict[str, Arm]` instead of assuming `robot.left_arm`/`robot.right_a
 - Geodude's Arm becomes a thin construction wrapper that builds mj_manipulator.Arm with UR5e config + EAIK solver + Robotiq gripper
 - **Test**: all planning/execution tests pass
 
-### Phase 5: Controller + context
+### Phase 5: Controller + SimContext (the simulation implementation)
 - Generalize `RobotPhysicsController` → `PhysicsController` (arm dict, not left/right)
-- Generalize `SimContext` → parameterized by arm registry
-- **Test**: physics-mode tests pass
+- Generalize `SimContext` → implements `ExecutionContext` protocol, parameterized by arm registry
+- Verify: primitives/cartesian depend only on `ExecutionContext` protocol, not `SimContext`
+- **Test**: physics-mode tests pass, mock `ExecutionContext` tests demonstrate protocol independence
 
 ### Phase 6: Primitives
-- Move `primitives.py` with `GraspSource` protocol
+- Move `primitives.py` — depends on `ExecutionContext` + `GraspSource` protocols
+- `pickup(arm, obj, grasp_source, context)` where `context: ExecutionContext`
 - Geodude's `AffordanceRegistry` implements `GraspSource`
-- **Test**: pickup/place tests pass
+- **Test**: pickup/place tests pass with mock `ExecutionContext` (no MuJoCo needed)
 
 ### Phase 7: Cleanup
 - Remove geodude shims/re-exports
