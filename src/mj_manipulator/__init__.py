@@ -30,7 +30,17 @@ from mj_manipulator.protocols import (
     Gripper,
     IKSolver,
 )
+from mj_manipulator.cartesian import (
+    CartesianControlConfig,
+    MoveUntilTouchResult,
+    TwistExecutionResult,
+    TwistStepResult,
+    get_ee_jacobian,
+    step_twist,
+    twist_to_joint_velocity,
+)
 from mj_manipulator.collision import CollisionChecker
+from mj_manipulator.executor import KinematicExecutor, PhysicsExecutor
 from mj_manipulator.grasp_manager import GraspManager, detect_grasped_object
 from mj_manipulator.trajectory import Trajectory, create_linear_trajectory
 
@@ -51,6 +61,17 @@ __all__ = [
     "detect_grasped_object",
     # Collision checking
     "CollisionChecker",
+    # Executors
+    "KinematicExecutor",
+    "PhysicsExecutor",
+    # Cartesian control
+    "CartesianControlConfig",
+    "TwistStepResult",
+    "MoveUntilTouchResult",
+    "TwistExecutionResult",
+    "get_ee_jacobian",
+    "twist_to_joint_velocity",
+    "step_twist",
     # Config
     "ArmConfig",
     "EntityConfig",
