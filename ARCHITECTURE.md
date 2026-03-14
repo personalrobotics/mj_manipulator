@@ -434,21 +434,50 @@ class UR5eHardwareContext:
 | **#69** (TSR migration) | Do separately — orthogonal to extraction |
 | **#70** (robot.py pass-throughs) | Absorbed — robot.py shrinks naturally |
 
-## Verification (2-arm validation at each phase)
+## Verification: Tests vs Demos
 
-Each phase must include tests and a working demo with at least **UR5e and Franka** arms:
+### Tests (`tests/`) — correctness, CI-friendly
 
-- **Phase 1**: Unit tests for Trajectory, PlanResult, config serialization. Demo: create ArmConfig for both UR5e and Franka.
-- **Phase 2**: Unit tests for CollisionChecker, GraspManager. Demo: check collisions with both arm models.
-- **Phase 3**: Unit tests for executors, cartesian QP solver. Demo: cartesian twist step with both arms.
-- **Phase 4**: Integration tests for Arm (FK, planning). Demo: plan + execute trajectory with both arms.
-- **Phase 5**: Integration tests for PhysicsController, SimContext. Demo: physics-mode stepping with both arms.
-- **Phase 6**: Integration tests for pickup/place. Demo: pick object with both arms.
-- **Phase 7**: Full regression. All geodude tests pass.
-- **Phase 8**: End-to-end Franka example: plan, execute, grasp, cartesian teleop.
+Automated, run with `uv run pytest tests/ -v`. No robot models, no viewer, no GPU. Use mocks and pure logic. Every phase adds tests.
 
-After each phase: `cd mj_manipulator && uv run pytest tests/ -v`
-After Phase 7+: `cd geodude && uv run pytest tests/ -v`
+| Phase | Tests |
+|---|---|
+| **1** | Trajectory (construction, TOPP-RA, interpolation), PlanResult, Config (UR5e + Franka), Protocol satisfaction (isinstance), ExecutionContext mock lifecycle |
+| **2** | GraspManager (mark/release, attach/detach, collision groups), CollisionChecker (is_valid with mock model, grasp filtering) |
+| **3** | Cartesian QP solver (twist → joint velocities, joint limit constraints), executor interface (mock-based) |
+| **4** | Arm (FK, joint read/write, plan_to with mock IK + collision checker) |
+| **5** | SimContext (trajectory routing, step/step_cartesian, arm controller creation), PhysicsController (multi-arm target management) |
+| **6** | Primitives (pickup/place with mock ExecutionContext + mock GraspSource — no MuJoCo needed) |
+| **7** | Full geodude regression: `cd ../geodude && uv run pytest tests/ -v` |
+
+### Demos (`demos/`) — integration, real robot models
+
+Standalone scripts, run directly with `python demos/...`. Load real MuJoCo models, may open viewer. Show the framework working end-to-end with actual robots. Serve as documentation for users adopting the framework.
+
+| Phase | Demo | What it shows |
+|---|---|---|
+| **2** | `demos/collision_check.py` | Load UR5e + Franka models, check collisions at various configs |
+| **4** | `demos/plan_trajectory.py` | Plan + visualize trajectories for both UR5e and Franka |
+| **5** | `demos/sim_context.py` | Open viewer, execute trajectory, cartesian step, grasp/release (both arms) |
+| **6** | `demos/pickup_place.py` | Full pickup/place with both robots |
+| **8** | `demos/franka_e2e.py` | End-to-end Franka: plan, execute, grasp, cartesian teleop, policy loop |
+
+Key differences:
+- **Tests** answer "is the code correct?" — run in CI, mock everything external
+- **Demos** answer "does it work with my robot?" — load real models, show visual results, serve as examples
+
+### Commands
+
+```bash
+# After every phase:
+cd mj_manipulator && uv run pytest tests/ -v
+
+# After Phase 7+:
+cd ../geodude && uv run pytest tests/ -v
+
+# Run a specific demo:
+cd mj_manipulator && uv run python demos/sim_context.py
+```
 
 ## Workflow
 
