@@ -1,0 +1,43 @@
+[project]
+name = "mj-manipulator"
+version = "0.1.0"
+description = "Generic MuJoCo manipulator control: planning, execution, grasping, and cartesian control for any robot arm"
+readme = "README.md"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "Siddhartha Srinivasa", email = "siddh@cs.washington.edu"}
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "mujoco",
+    "scipy",
+    "toppra>=0.6.3",
+    "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
+]
+
+[tool.uv.sources]
+mj-environment = { path = "../mj_environment", editable = true }
+pycbirrt = { path = "../pycbirrt", editable = true }
+
+[project.optional-dependencies]
+planning = [
+    "pycbirrt",
+]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mj_manipulator"]
+
+[tool.ruff]
+lint.select = ["F", "E", "W", "I"]
