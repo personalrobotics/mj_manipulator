@@ -14,6 +14,7 @@ dependencies = [
     "scipy",
     "toppra>=0.6.3",
     "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
+    "pycbirrt @ git+https://github.com/siddhss5/pycbirrt.git",
 ]
 
 [tool.uv.sources]
@@ -21,9 +22,6 @@ mj-environment = { path = "../mj_environment", editable = true }
 pycbirrt = { path = "../pycbirrt", editable = true }
 
 [project.optional-dependencies]
-planning = [
-    "pycbirrt",
-]
 dev = [
     "pytest",
     "ruff",

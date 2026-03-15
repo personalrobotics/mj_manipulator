@@ -593,6 +593,7 @@ dependencies = [
     { name = "mujoco" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pycbirrt" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "toppra" },
@@ -603,22 +604,19 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-planning = [
-    { name = "pycbirrt" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "mj-environment", editable = "../mj_environment" },
     { name = "mujoco" },
     { name = "numpy" },
-    { name = "pycbirrt", marker = "extra == 'planning'", editable = "../pycbirrt" },
+    { name = "pycbirrt", editable = "../pycbirrt" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
     { name = "toppra", specifier = ">=0.6.3" },
 ]
-provides-extras = ["planning", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "mujoco"
