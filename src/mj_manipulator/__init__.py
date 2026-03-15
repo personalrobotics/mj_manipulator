@@ -22,6 +22,7 @@ from mj_manipulator.config import (
     PlanningDefaults,
     RecoveryConfig,
 )
+from mj_manipulator.arm import Arm, ArmRobotModel, ContextRobotModel
 from mj_manipulator.planning import PlanResult
 from mj_manipulator.protocols import (
     ArmController,
@@ -45,6 +46,10 @@ from mj_manipulator.grasp_manager import GraspManager, detect_grasped_object
 from mj_manipulator.trajectory import Trajectory, create_linear_trajectory
 
 __all__ = [
+    # Arm
+    "Arm",
+    "ArmRobotModel",
+    "ContextRobotModel",
     # Protocols (the core contracts)
     "ExecutionContext",
     "ArmController",
