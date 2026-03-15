@@ -15,6 +15,7 @@ dependencies = [
     "toppra>=0.6.3",
     "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "pycbirrt @ git+https://github.com/siddhss5/pycbirrt.git",
+    "eaik",
 ]
 
 [tool.uv.sources]
