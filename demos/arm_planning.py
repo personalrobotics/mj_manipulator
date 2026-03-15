@@ -1,11 +1,9 @@
-"""Arm planning demo with UR5e and Franka Panda.
+"""Motion planning demo with UR5e and Franka Panda.
 
-Demonstrates the Arm class with IK and motion planning using arm factories:
-  1. Create arms with one-line factory calls
-  2. IK: solve for target EE poses
-  3. FK: verify IK solutions
-  4. Motion planning: plan_to_configuration, plan_to_pose
-  5. Trajectory retiming
+Demonstrates the Arm class's motion planning capabilities using arm factories:
+  1. plan_to_configuration: collision-free joint-space paths
+  2. plan_to_pose: pose goal via point TSR (planner handles IK)
+  3. Trajectory retiming: time-parameterized trajectories
 
 Usage:
     cd mj_manipulator
@@ -42,95 +40,69 @@ def print_header(title):
 
 
 # ---------------------------------------------------------------------------
-# Demo 1: Factory + state queries
+# Demo 1: Plan to configuration
 # ---------------------------------------------------------------------------
-def demo_factory(arm, home_q, label):
-    """Show that arm factories produce working Arm instances."""
-    print_header(f"{label} - Factory ({arm.dof}-DOF)")
-
-    print(f"\n  Joint names: {arm.config.joint_names}")
-    print(f"  DOF:         {arm.dof}")
-    print(f"  Has IK:      {arm.ik_solver is not None}")
-
-    q = arm.get_joint_positions()
-    print(f"  Current q:   {np.array2string(q, precision=4)}")
-
-    pose = arm.get_ee_pose()
-    print(f"  EE position: {np.array2string(pose[:3, 3], precision=4)}")
-
-    lower, upper = arm.get_joint_limits()
-    print(f"  Joint range: [{lower.min():.2f}, {upper.max():.2f}] rad")
-
-
-# ---------------------------------------------------------------------------
-# Demo 2: IK round-trip
-# ---------------------------------------------------------------------------
-def demo_ik(arm, label):
-    """Solve IK for the current EE pose and verify via FK."""
-    print_header(f"{label} - IK Round-Trip")
-
-    pose = arm.get_ee_pose()
-    pos = pose[:3, 3]
-    print(f"\n  Target EE pos: {np.array2string(pos, precision=4)}")
-
-    solutions = arm.ik_solver.solve_valid(pose)
-    print(f"  IK solutions:  {len(solutions)}")
-
-    if not solutions:
-        print("  WARNING: No IK solutions found!")
-        return
-
-    # Verify best solution via FK
-    best_err = float("inf")
-    best_q = None
-    for q in solutions:
-        fk_pose = arm.forward_kinematics(q)
-        err = np.linalg.norm(fk_pose[:3, 3] - pos)
-        if err < best_err:
-            best_err = err
-            best_q = q
-
-    print(f"  Best FK error: {best_err*1000:.3f} mm")
-    print(f"  Best q:        {np.array2string(best_q, precision=4)}")
-
-
-# ---------------------------------------------------------------------------
-# Demo 3: Motion planning
-# ---------------------------------------------------------------------------
-def demo_planning(arm, q_goal, label):
-    """Plan from current config to a goal configuration."""
-    print_header(f"{label} - Motion Planning")
+def demo_plan_to_config(arm, q_goal, label):
+    """Plan a collision-free path from current config to a goal."""
+    print_header(f"{label} - Plan to Configuration ({arm.dof}-DOF)")
 
     q_start = arm.get_joint_positions()
     print(f"\n  Start: {np.array2string(q_start, precision=4)}")
     print(f"  Goal:  {np.array2string(q_goal, precision=4)}")
+    print(f"  Joint delta: {np.linalg.norm(q_goal - q_start):.3f} rad")
 
     path = arm.plan_to_configuration(q_goal, timeout=10.0, seed=42)
 
     if path is None:
-        print("  Planning failed (no collision-free path found)")
+        print("  Planning FAILED (no collision-free path found)")
         return
 
     print(f"  Path:  {len(path)} waypoints")
 
-    # Show trajectory retiming
-    traj = arm.plan_trajectory(q_goal, timeout=10.0, seed=42)
-    if traj is not None:
-        print(f"\n  Trajectory duration: {traj.duration:.3f} s")
-        print(f"  Trajectory samples:  {len(traj.positions)}")
+    # Show start/end FK positions
+    fk_start = arm.forward_kinematics(path[0])
+    fk_end = arm.forward_kinematics(path[-1])
+    ee_dist = np.linalg.norm(fk_end[:3, 3] - fk_start[:3, 3])
+    print(f"  EE travel: {ee_dist*1000:.1f} mm")
 
 
 # ---------------------------------------------------------------------------
-# Demo 4: Plan to pose (IK + planning)
+# Demo 2: Trajectory retiming
+# ---------------------------------------------------------------------------
+def demo_trajectory(arm, q_goal, label):
+    """Plan then retime (time-parameterized output)."""
+    print_header(f"{label} - Trajectory Retiming ({arm.dof}-DOF)")
+
+    path = arm.plan_to_configuration(q_goal, timeout=10.0, seed=42)
+
+    if path is None:
+        print("  Planning failed")
+        return
+
+    traj = arm.retime(path)
+
+    print(f"\n  Duration: {traj.duration:.3f} s")
+    print(f"  Samples:  {len(traj.positions)}")
+
+    # Show first and last position
+    print(f"  q[0]:     {np.array2string(traj.positions[0], precision=4)}")
+    print(f"  q[-1]:    {np.array2string(traj.positions[-1], precision=4)}")
+
+    # Goal match
+    goal_err = np.linalg.norm(traj.positions[-1] - q_goal)
+    print(f"  Goal err: {goal_err:.6f} rad")
+
+
+# ---------------------------------------------------------------------------
+# Demo 3: Plan to pose (IK + planning)
 # ---------------------------------------------------------------------------
 def demo_plan_to_pose(arm, label):
-    """Plan to a target EE pose via IK + motion planning."""
-    print_header(f"{label} - Plan to Pose (IK + Planning)")
+    """Plan to a target EE pose (planner handles IK via point TSR)."""
+    print_header(f"{label} - Plan to Pose ({arm.dof}-DOF)")
 
-    # Create a target pose: current pose shifted 5cm in +X
     current_pose = arm.get_ee_pose()
     target_pose = current_pose.copy()
-    target_pose[0, 3] += 0.05
+    target_pose[0, 3] += 0.05  # Shift 5cm in +X
 
     print(f"\n  Current EE: {np.array2string(current_pose[:3, 3], precision=4)}")
     print(f"  Target EE:  {np.array2string(target_pose[:3, 3], precision=4)}")
@@ -138,7 +110,7 @@ def demo_plan_to_pose(arm, label):
     path = arm.plan_to_pose(target_pose, timeout=10.0, seed=42)
 
     if path is None:
-        print("  Plan to pose failed (IK or planning failed)")
+        print("  Plan to pose FAILED (IK or planning failed)")
         return
 
     print(f"  Path: {len(path)} waypoints")
@@ -164,11 +136,9 @@ def main():
         ur5e_env.data.qpos[idx] = UR5E_HOME[i]
     mujoco.mj_forward(ur5e_env.model, ur5e_env.data)
 
-    demo_factory(ur5e, UR5E_HOME, "UR5e")
-    demo_ik(ur5e, "UR5e")
-
     ur5e_goal = UR5E_HOME + np.array([0.3, -0.2, 0.1, -0.1, 0.2, 0.0])
-    demo_planning(ur5e, ur5e_goal, "UR5e")
+    demo_plan_to_config(ur5e, ur5e_goal, "UR5e")
+    demo_trajectory(ur5e, ur5e_goal, "UR5e")
     demo_plan_to_pose(ur5e, "UR5e")
 
     # --- Franka ---
@@ -187,15 +157,13 @@ def main():
         franka_env.data.qpos[idx] = FRANKA_HOME[i]
     mujoco.mj_forward(franka_env.model, franka_env.data)
 
-    demo_factory(franka, FRANKA_HOME, "Franka Panda")
-    demo_ik(franka, "Franka Panda")
-
     franka_goal = FRANKA_HOME + np.array([0.2, -0.1, 0.0, 0.3, 0.0, -0.2, 0.1])
-    demo_planning(franka, franka_goal, "Franka Panda")
+    demo_plan_to_config(franka, franka_goal, "Franka Panda")
+    demo_trajectory(franka, franka_goal, "Franka Panda")
     demo_plan_to_pose(franka, "Franka Panda")
 
     print_header(
-        "DONE - Same Arm API with IK + planning\n"
+        "DONE - Same planning API\n"
         "  works with UR5e (6-DOF) and Franka Panda (7-DOF)"
     )
     print()

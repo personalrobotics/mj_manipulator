@@ -168,6 +168,31 @@ class MuJoCoEAIKSolver:
                 lo, hi = -3.14, 3.14
             self._discretize_values = np.linspace(lo, hi, n_discretizations)
 
+    @property
+    def H(self) -> np.ndarray:
+        """Joint axes matrix (n_joints, 3) in base frame."""
+        return self._H
+
+    @property
+    def P(self) -> np.ndarray:
+        """Position offsets (n_joints+1, 3) in base frame."""
+        return self._P
+
+    @property
+    def robot(self):
+        """EAIK HPRobot instance, or None for 7-DOF (discretized)."""
+        return self._robot
+
+    @property
+    def fixed_joint_index(self) -> int | None:
+        """Index of the locked joint for 7-DOF discretization, or None."""
+        return self._fixed_joint_index
+
+    @property
+    def discretize_values(self) -> np.ndarray | None:
+        """Discretization values for the locked joint, or None for 6-DOF."""
+        return self._discretize_values
+
     def _get_base_pose(self) -> np.ndarray:
         """Get arm base body pose in world frame (4x4)."""
         return _read_body_pose(self._data, self._base_body_id)

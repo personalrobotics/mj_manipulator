@@ -764,6 +764,7 @@ dependencies = [
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "toppra" },
+    { name = "tsr" },
 ]
 
 [package.optional-dependencies]
@@ -783,6 +784,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "scipy" },
     { name = "toppra", specifier = ">=0.6.3" },
+    { name = "tsr", editable = "../tsr" },
 ]
 provides-extras = ["dev"]
 
