@@ -220,10 +220,6 @@ class _BaseGripper:
             return None
 
         positions = [self._data.xpos[bid] for bid in self._gripper_body_ids]
-
-        if not positions:
-            return None
-
         gripper_pos = np.mean(positions, axis=0)
         threshold = 0.05
 
