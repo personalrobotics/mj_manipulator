@@ -17,6 +17,7 @@ uv run python demos/<script>.py
 
 | Script | What it shows |
 |---|---|
+| `recycling.py` | **Capstone demo** — full stack integration: prl_assets models, AssetManager-driven TSR grasping, MjSpec scene composition, GraspManager, SimContext. UR5e + Franka each recycle 3 soda cans into a bin. |
 | `ik_solver.py` | EAIK analytical IK: kinematic extraction from MuJoCo, multi-config IK with solution analysis, FK round-trip verification |
 | `arm_planning.py` | Motion planning with CBiRRT: plan to configuration, plan to pose (via TSRs), trajectory retiming with TOPP-RA |
 | `collision_check.py` | Collision checking: simple mode, grasp-aware mode, batch configuration validation |

@@ -32,8 +32,11 @@ _FINGER_JOINT_SUFFIXES = ["finger_joint1", "finger_joint2"]
 # Body name suffixes for contact detection.
 _BODY_SUFFIXES = ["hand", "left_finger", "right_finger"]
 
-# Attachment body (finger that objects weld to during kinematic grasping).
-_ATTACHMENT_BODY_SUFFIX = "left_finger"
+# Attachment body used for kinematic tracking and collision-checker gripper-object
+# contact allowance.  Using "hand" (parent of both fingers) ensures that contacts
+# between EITHER finger and a grasped object are recognised as valid gripper-object
+# contacts, not self-collisions.
+_ATTACHMENT_BODY_SUFFIX = "hand"
 
 # Finger joint range (slide joints, meters).
 _FINGER_OPEN = 0.04   # Fully open position

@@ -268,5 +268,5 @@ class TestAddFrankaEeSite:
         add_franka_ee_site(spec, pos=[0, 0, 0.2])
         model = spec.compile()
 
-        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
+        site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "grasp_site")
         assert site_id != -1

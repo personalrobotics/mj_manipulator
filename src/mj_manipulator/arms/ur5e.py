@@ -41,6 +41,8 @@ UR5E_JOINT_NAMES = [
 ]
 
 UR5E_EE_SITE = "attachment_site"
+# When Robotiq is attached with prefix "gripper/", use its grasp_site instead.
+UR5E_ROBOTIQ_EE_SITE = "gripper/grasp_site"
 
 UR5E_HOME = np.array([-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0])
 

@@ -135,6 +135,15 @@ class _BaseGripper:
             t = i / steps
             self._apply_kinematic_position(t)
 
+            # Stop before gripper finger-to-finger self-contact.  If fingers
+            # are about to touch each other with no object between them, back
+            # off one step so the collision checker doesn't see an invalid
+            # gripper self-collision at the start of subsequent planning.
+            if self._is_gripper_self_contact():
+                if i > 0:
+                    self._apply_kinematic_position((i - 1) / steps)
+                break
+
             contacted_body = self._check_gripper_contact()
             if contacted_body:
                 # Only stop for candidate objects (ignore arm self-contacts)
@@ -158,26 +167,50 @@ class _BaseGripper:
     def _check_gripper_contact(self) -> str | None:
         """Check if gripper is in contact with any non-gripper body.
 
+        Scans all active contacts. Candidate objects are prioritised over
+        incidental contacts (e.g. fingers touching the table on the way in).
+
         Returns:
             Name of contacted body, or None.
         """
+        first_non_gripper: str | None = None
+
         for i in range(self._data.ncon):
             contact = self._data.contact[i]
             geom1_body = self._model.geom_bodyid[contact.geom1]
             geom2_body = self._model.geom_bodyid[contact.geom2]
 
+            other: str | None = None
             if (geom1_body in self._gripper_body_ids
                     and geom2_body not in self._gripper_body_ids):
-                return mujoco.mj_id2name(
+                other = mujoco.mj_id2name(
                     self._model, mujoco.mjtObj.mjOBJ_BODY, geom2_body,
                 )
-            if (geom2_body in self._gripper_body_ids
+            elif (geom2_body in self._gripper_body_ids
                     and geom1_body not in self._gripper_body_ids):
-                return mujoco.mj_id2name(
+                other = mujoco.mj_id2name(
                     self._model, mujoco.mjtObj.mjOBJ_BODY, geom1_body,
                 )
 
-        return None
+            if other is not None:
+                if self._candidate_objects and other in self._candidate_objects:
+                    return other  # candidate contact takes priority
+                if first_non_gripper is None:
+                    first_non_gripper = other
+
+        return first_non_gripper
+
+    def _is_gripper_self_contact(self) -> bool:
+        """Check if two distinct gripper bodies are in contact with each other."""
+        for i in range(self._data.ncon):
+            contact = self._data.contact[i]
+            b1 = self._model.geom_bodyid[contact.geom1]
+            b2 = self._model.geom_bodyid[contact.geom2]
+            if (b1 in self._gripper_body_ids
+                    and b2 in self._gripper_body_ids
+                    and b1 != b2):
+                return True
+        return False
 
     def _detect_grasp_geometric(self) -> str | None:
         """Detect grasp using geometric proximity to candidate objects.
