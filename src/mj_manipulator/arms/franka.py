@@ -51,8 +51,10 @@ FRANKA_ACCELERATION_LIMITS = (
     np.array([15.0, 7.5, 10.0, 12.5, 15.0, 20.0, 20.0]) * 0.5
 )
 
-# Joint 5 (index 4) is the only joint whose locking yields an EAIK
-# decomposition with exact analytical solutions (SPHERICAL_SECOND_TWO_PARALLEL).
+# Joint 5 (index 4) is the only joint whose locking yields a known EAIK
+# decomposition (SPHERICAL_SECOND_TWO_PARALLEL). Determined via:
+#   find_locked_joint_index(H, P)  →  4
+# For a new arm, call find_locked_joint_index() to discover the right index.
 _FRANKA_LOCKED_JOINT_INDEX = 4
 
 

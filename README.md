@@ -9,7 +9,7 @@ Pre-built arm factories in `mj_manipulator.arms`:
 - **UR5e** (6-DOF) — `create_ur5e_arm(env)`
 - **Franka Emika Panda** (7-DOF) — `create_franka_arm(env)`
 
-Adding a new arm is straightforward — see `mj_manipulator/arms/__init__.py` for the recipe.
+See [Adding a New Arm](#adding-a-new-arm) below.
 
 ## Installation
 
@@ -96,6 +96,93 @@ mj_environment  →  mj_manipulator  →  geodude (UR5e + Robotiq)
 ```
 
 Robot-specific code (joint names, limits, IK config) lives in `arms/<robot>.py`. The generic layer (`Arm`, protocols, executors) knows nothing about specific robots.
+
+## Adding a New Arm
+
+`arms/ur5e.py` (6-DOF) and `arms/franka.py` (7-DOF) are the complete references. The steps:
+
+**1. Create `arms/<robot>.py`**
+
+```python
+import numpy as np
+from mj_manipulator.arm import Arm
+from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+from mj_manipulator.config import ArmConfig, KinematicLimits
+
+MY_ROBOT_JOINT_NAMES = ["joint1", "joint2", ...]   # from your XML
+MY_ROBOT_HOME        = np.array([0.0, 0.0, ...])
+MY_ROBOT_VEL_LIMITS  = np.array([...]) * 0.5       # datasheet values, halved
+MY_ROBOT_ACC_LIMITS  = np.array([...]) * 0.5
+
+def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True, ...):
+    config = ArmConfig(
+        name="my_robot", entity_type="arm",
+        joint_names=list(MY_ROBOT_JOINT_NAMES),
+        kinematic_limits=KinematicLimits(
+            velocity=MY_ROBOT_VEL_LIMITS.copy(),
+            acceleration=MY_ROBOT_ACC_LIMITS.copy(),
+        ),
+        ee_site=ee_site,
+    )
+    if not with_ik:
+        return Arm(env, config)
+    arm = Arm(env, config)
+    first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
+    base_body_id = env.model.body_parentid[first_joint_body]
+    ik_solver = MuJoCoEAIKSolver(
+        model=env.model, data=env.data,
+        joint_ids=list(arm.joint_ids),
+        joint_qpos_indices=arm.joint_qpos_indices,
+        ee_site_id=arm.ee_site_id,
+        base_body_id=base_body_id,
+        joint_limits=arm.get_joint_limits(),
+        # fixed_joint_index=MY_ROBOT_LOCKED_JOINT,  # 7-DOF only — see step 2
+    )
+    return Arm(env, config, ik_solver=ik_solver)
+```
+
+**2. Find the locked joint (7-DOF only)**
+
+Run this once as a one-off script to discover which joint to lock:
+
+```python
+from mj_manipulator.arms import find_locked_joint_index
+from mj_manipulator.arms.eaik_solver import _extract_hp
+
+arm = Arm(env, config)  # create without IK first
+first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
+base_body_id     = env.model.body_parentid[first_joint_body]
+H, P, _          = _extract_hp(env.model, env.data, list(arm.joint_ids),
+                                arm.joint_qpos_indices, arm.ee_site_id, base_body_id)
+print(find_locked_joint_index(H, P))  # → hardcode this as MY_ROBOT_LOCKED_JOINT
+```
+
+Then pass `fixed_joint_index=MY_ROBOT_LOCKED_JOINT` to `MuJoCoEAIKSolver`.
+
+**3. Add an EE site if the model doesn't have one**
+
+Use `MjSpec` to add the site before creating the `Environment`:
+
+```python
+spec = mujoco.MjSpec.from_file("path/to/scene.xml")
+hand = spec.worldbody.find_child("hand")  # adjust to your link name
+site = hand.add_site()
+site.name = "grasp_site"
+site.pos = [0, 0, 0.1]   # at palm/flange; z = approach direction
+model = spec.compile()
+env = Environment.from_model(model)
+```
+
+See `add_franka_ee_site()` in `arms/franka.py` for the pattern.
+
+**4. Add tests** — copy `TestUR5eFactory` / `TestUR5eIK` from `tests/test_arms.py`:
+factory creates valid Arm, FK-IK round-trip, all solutions within joint limits.
+
+**5. Re-export** — add to `arms/__init__.py`:
+```python
+from mj_manipulator.arms.my_robot import create_my_robot_arm
+__all__ = [..., "create_my_robot_arm"]
+```
 
 ## Demos
 
