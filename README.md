@@ -99,10 +99,12 @@ Robot-specific code (joint names, limits, IK config) lives in `arms/<robot>.py`.
 
 ## Demos
 
-See [demos/README.md](demos/README.md) for runnable examples with real MuJoCo models.
+See [demos/README.md](demos/README.md) for the full list. The capstone demo runs both robots end-to-end:
 
 ```bash
 cd mj_manipulator
-uv run python demos/ik_solver.py       # EAIK analytical IK showcase
-uv run python demos/arm_planning.py    # Motion planning with CBiRRT
+uv run mjpython demos/recycling.py --robot both   # UR5e + Franka recycling demo
+uv run mjpython demos/recycling.py --robot ur5e --headless
+uv run python demos/ik_solver.py                  # EAIK analytical IK showcase
+uv run python demos/arm_planning.py               # Motion planning with CBiRRT
 ```
