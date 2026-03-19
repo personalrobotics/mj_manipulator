@@ -63,22 +63,30 @@ _FRANKA_LOCKED_JOINT_INDEX = 4
 
 def add_franka_ee_site(
     spec: mujoco.MjSpec,
-    site_name: str = "ee_site",
+    site_name: str = "grasp_site",
     pos: list[float] | None = None,
 ) -> None:
-    """Add an end-effector site to the Franka hand body in an MjSpec.
+    """Add a grasp_site to the Franka hand body in an MjSpec.
+
+    The site is placed at the canonical TSR EE frame (z=approach toward
+    fingertips, y=finger-opening). The Franka hand frame already has this
+    orientation, so no rotation is needed — only a position offset.
+
+    The default position [0, 0, 0.0584] is the finger-joint origin (palm),
+    matching the TSR convention used by FrankaHand: EE at the palm so that
+    finger_length (44.5 mm) gives the correct fingertip standoff.
 
     Call this before compiling the spec if the Franka model doesn't have
     an EE site (the menagerie model doesn't include one).
 
     Args:
         spec: MjSpec loaded from a Franka scene XML.
-        site_name: Name for the new site.
-        pos: Position relative to hand body. Defaults to [0, 0, 0.1034]
-             (roughly at fingertip center).
+        site_name: Name for the new site (default: "grasp_site").
+        pos: Position relative to hand body. Defaults to [0, 0, 0.0584]
+             (finger-joint origin = palm, 44.5 mm from fingertip contact).
     """
     if pos is None:
-        pos = [0.0, 0.0, 0.1034]
+        pos = [0.0, 0.0, 0.0584]
     hand = spec.worldbody.find_child("hand")
     site = hand.add_site()
     site.name = site_name
@@ -93,7 +101,7 @@ def add_franka_ee_site(
 def create_franka_arm(
     env: Environment,
     *,
-    ee_site: str = "ee_site",
+    ee_site: str = "grasp_site",
     with_ik: bool = True,
     n_discretizations: int = 16,
     tcp_offset: np.ndarray | None = None,

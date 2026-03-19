@@ -203,7 +203,7 @@ class TestFrankaGripperConstruction:
         assert "right_finger" in names
 
     def test_attachment_body(self, franka_gripper):
-        assert franka_gripper.attachment_body == "left_finger"
+        assert franka_gripper.attachment_body == "hand"
 
     def test_initially_not_holding(self, franka_gripper):
         assert not franka_gripper.is_holding

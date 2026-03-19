@@ -17,12 +17,15 @@ dependencies = [
     "pycbirrt @ git+https://github.com/siddhss5/pycbirrt.git",
     "tsr @ git+https://github.com/personalrobotics/tsr.git",
     "eaik",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
 ]
 
 [tool.uv.sources]
 mj-environment = { path = "../mj_environment", editable = true }
 pycbirrt = { path = "../pycbirrt", editable = true }
 tsr = { path = "../tsr", editable = true }
+prl-assets = { path = "../prl_assets", editable = true }
+asset-manager = { path = "../asset_manager", editable = true }
 
 [project.optional-dependencies]
 dev = [

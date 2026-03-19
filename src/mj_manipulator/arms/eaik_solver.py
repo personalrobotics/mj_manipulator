@@ -51,8 +51,9 @@ def _extract_hp(
         base_body_id: Body ID of the arm base.
 
     Returns:
-        (H, P) where H is (n_joints, 3) joint axes and P is (n_joints+1, 3)
-        position offsets, both in the base body frame at q=zeros.
+        (H, P, ee_rot) where H is (n_joints, 3) joint axes, P is (n_joints+1, 3)
+        position offsets, and ee_rot is (3, 3) orientation of the EE site in the
+        base frame at q=zeros. All values are in the base body frame.
     """
     n_joints = len(joint_ids)
 
@@ -81,6 +82,13 @@ def _extract_hp(
 
     positions_world[n_joints] = tmp_data.site_xpos[ee_site_id]
 
+    # EE site orientation in base frame at q=zeros.
+    # EAIK's FK at q=zeros gives identity rotation (all joint angles are zero),
+    # so the actual site orientation at q=zeros IS the fixed offset that EAIK
+    # does not model. We store it so solve() can correct IK targets accordingly.
+    ee_rot_world = tmp_data.site_xmat[ee_site_id].reshape(3, 3)
+    ee_rot_base = base_rot_inv @ ee_rot_world
+
     # Convert to base frame
     H_base = (base_rot_inv @ H_world.T).T
     P_offsets = np.zeros((n_joints + 1, 3))
@@ -90,7 +98,7 @@ def _extract_hp(
             positions_world[i] - positions_world[i - 1]
         )
 
-    return H_base, P_offsets
+    return H_base, P_offsets, ee_rot_base
 
 
 class MuJoCoEAIKSolver:
@@ -143,8 +151,11 @@ class MuJoCoEAIKSolver:
         self._fixed_joint_index = fixed_joint_index
         self._HPRobot = HPRobot
 
-        # Extract H/P from MuJoCo model
-        self._H, self._P = _extract_hp(
+        # Extract H/P and EE orientation offset from MuJoCo model.
+        # _ee_rot_offset is the EE site's orientation in the base frame at q=zeros.
+        # EAIK's FK at q=zeros gives identity rotation (all joint angles zero),
+        # so this offset must be removed from IK targets before passing to EAIK.
+        self._H, self._P, self._ee_rot_offset = _extract_hp(
             model, data, joint_ids, joint_qpos_indices,
             ee_site_id, base_body_id,
         )
@@ -220,10 +231,17 @@ class MuJoCoEAIKSolver:
         """
         T_base = self._to_base_frame(pose)
 
+        # EAIK's FK at q=zeros gives identity rotation, but the actual EE site
+        # has orientation _ee_rot_offset in the base frame at q=zeros:
+        #   actual_site_R(q) = EAIK_FK_R(q) @ _ee_rot_offset
+        # To achieve target R_target: EAIK_FK_R must equal R_target @ _ee_rot_offset.T
+        T_eaik = T_base.copy()
+        T_eaik[:3, :3] = T_base[:3, :3] @ self._ee_rot_offset.T
+
         if self._robot is not None:
             # 6-DOF: solve directly
             try:
-                result = self._robot.IK(T_base)
+                result = self._robot.IK(T_eaik)
             except RuntimeError:
                 return []
             return [
@@ -240,7 +258,7 @@ class MuJoCoEAIKSolver:
                 fixed_axes=[(self._fixed_joint_index, theta)],
             )
             try:
-                result = robot.IK(T_base)
+                result = robot.IK(T_eaik)
             except RuntimeError:
                 continue
             for i in range(result.num_solutions()):
@@ -248,7 +266,7 @@ class MuJoCoEAIKSolver:
                 # EAIK marks all fixed_axes solutions as LS, even exact ones.
                 # Verify by FK round-trip instead.
                 T_check = robot.fwdKin(q)
-                if (np.linalg.norm(T_check[:3, 3] - T_base[:3, 3])
+                if (np.linalg.norm(T_check[:3, 3] - T_eaik[:3, 3])
                         < self._FK_TOLERANCE):
                     all_solutions.append(q)
 
