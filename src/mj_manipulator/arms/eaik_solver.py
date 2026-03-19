@@ -101,6 +101,40 @@ def _extract_hp(
     return H_base, P_offsets, ee_rot_base
 
 
+def find_locked_joint_index(H: np.ndarray, P: np.ndarray) -> int | None:
+    """Find which joint to lock for EAIK 7-DOF arm support.
+
+    Iterates over all joints and returns the first index that yields a known
+    EAIK decomposition when locked. Call this once (e.g. in a one-off script)
+    after extracting H/P from your model to determine ``fixed_joint_index``
+    for ``MuJoCoEAIKSolver``.
+
+    Example::
+
+        from mj_manipulator.arms.eaik_solver import _extract_hp, find_locked_joint_index
+
+        # After creating your Arm (arm) and extracting joint/site IDs:
+        H, P, _ = _extract_hp(model, data, joint_ids, qpos_indices, ee_site_id, base_id)
+        idx = find_locked_joint_index(H, P)
+        # → e.g. 4 for Franka. Hardcode this as YOUR_ROBOT_LOCKED_JOINT_INDEX.
+
+    Args:
+        H: Joint axes (n_joints, 3) from ``_extract_hp``.
+        P: Position offsets (n_joints+1, 3) from ``_extract_hp``.
+
+    Returns:
+        Joint index to pass as ``fixed_joint_index``, or None if no joint works
+        (the arm may not be supported by EAIK).
+    """
+    from eaik.IK_HP import HPRobot
+
+    for i in range(len(H)):
+        robot = HPRobot(H, P, fixed_axes=[(i, 0.0)])
+        if robot.hasKnownDecomposition():
+            return i
+    return None
+
+
 class MuJoCoEAIKSolver:
     """EAIK IK solver that extracts kinematics directly from a MuJoCo model.
 
