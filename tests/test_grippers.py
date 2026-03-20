@@ -24,11 +24,11 @@ from mj_manipulator.protocols import Gripper
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-WORKSPACE = Path(__file__).resolve().parent.parent.parent  # robot-code/
-MENAGERIE = WORKSPACE / "mujoco_menagerie"
-FRANKA_SCENE = MENAGERIE / "franka_emika_panda" / "scene.xml"
-GEODUDE_ASSETS = WORKSPACE / "geodude_assets" / "src" / "geodude_assets" / "models"
-ROBOTIQ_SCENE = GEODUDE_ASSETS / "robotiq_2f140" / "scene.xml"
+_WORKSPACE = Path(__file__).resolve().parent.parent.parent  # robot-code/
+_ROBOTIQ_SCENE = (
+    _WORKSPACE / "geodude_assets" / "src" / "geodude_assets" / "models"
+    / "robotiq_2f140" / "scene.xml"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -38,9 +38,9 @@ ROBOTIQ_SCENE = GEODUDE_ASSETS / "robotiq_2f140" / "scene.xml"
 
 @pytest.fixture
 def robotiq_env():
-    if not ROBOTIQ_SCENE.exists():
+    if not _ROBOTIQ_SCENE.exists():
         pytest.skip("geodude_assets not found")
-    return Environment(str(ROBOTIQ_SCENE))
+    return Environment(str(_ROBOTIQ_SCENE))
 
 
 @pytest.fixture
@@ -52,14 +52,17 @@ def robotiq_gripper(robotiq_env):
 
 @pytest.fixture
 def franka_env():
-    if not FRANKA_SCENE.exists():
+    try:
+        from mj_manipulator.menagerie import menagerie_scene
+        franka_scene = menagerie_scene("franka_emika_panda")
+    except FileNotFoundError:
         pytest.skip("mujoco_menagerie not found")
     from mj_manipulator.arms.franka import add_franka_ee_site
 
-    spec = mujoco.MjSpec.from_file(str(FRANKA_SCENE))
+    spec = mujoco.MjSpec.from_file(str(franka_scene))
     add_franka_ee_site(spec)
 
-    franka_dir = FRANKA_SCENE.parent
+    franka_dir = franka_scene.parent
     tmp_path = franka_dir / "_test_gripper_franka.xml"
     try:
         tmp_path.write_text(spec.to_xml())

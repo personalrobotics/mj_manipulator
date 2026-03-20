@@ -55,6 +55,7 @@ from mj_manipulator.config import PhysicsConfig, PhysicsExecutionConfig
 from mj_manipulator.grasp_manager import GraspManager
 from mj_manipulator.grippers.franka import FrankaGripper
 from mj_manipulator.grippers.robotiq import RobotiqGripper
+from mj_manipulator.menagerie import menagerie_scene
 from mj_manipulator.sim_context import SimContext
 from prl_assets import OBJECTS_DIR
 from tsr.hands import FrankaHand, Robotiq2F140
@@ -70,9 +71,8 @@ logger = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 WORKSPACE = Path(__file__).resolve().parent.parent.parent  # robot-code/
-MENAGERIE = WORKSPACE / "mujoco_menagerie"
-UR5E_SCENE   = MENAGERIE / "universal_robots_ur5e"  / "scene.xml"
-FRANKA_SCENE = MENAGERIE / "franka_emika_panda"     / "scene.xml"
+UR5E_SCENE   = menagerie_scene("universal_robots_ur5e")
+FRANKA_SCENE = menagerie_scene("franka_emika_panda")
 ROBOTIQ_MODEL = (
     WORKSPACE
     / "geodude_assets"
