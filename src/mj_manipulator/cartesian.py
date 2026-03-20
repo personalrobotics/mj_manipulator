@@ -715,6 +715,67 @@ class CartesianController:
             final_pose=self._get_ee_pose(),
         )
 
+    def move_until_contact(
+        self,
+        twist: np.ndarray,
+        dt: float,
+        gripper_body_names: list[str],
+        *,
+        max_distance: float = 0.2,
+        step_fn: Callable[[], None] | None = None,
+    ) -> MoveUntilTouchResult:
+        """Move along a twist until gripper contact is detected.
+
+        Useful for approach moves: push toward an object until touch.
+        Contact is checked at the start of each step so the first detected
+        contact stops motion immediately.
+
+        Args:
+            twist: 6D desired twist [vx, vy, vz, wx, wy, wz].
+            dt: Control timestep (seconds).
+            gripper_body_names: Body names of gripper parts to monitor.
+            max_distance: Stop after EE moves this far without contact (meters).
+            step_fn: Advance simulation after each step. Defaults to
+                ``mj_forward`` for kinematic simulation.
+
+        Returns:
+            MoveUntilTouchResult. ``success=True`` if contact was detected.
+        """
+        if step_fn is None:
+            def step_fn():
+                mujoco.mj_forward(self.model, self.data)
+
+        self.reset()
+
+        distance = 0.0
+        last_pos = self.data.site_xpos[self.ee_site_id].copy()
+        terminated_by: Literal["contact", "max_distance", "no_progress"] = "max_distance"
+        contact_geom: str | None = None
+
+        while distance < max_distance:
+            contact_geom = check_gripper_contact(self.model, self.data, gripper_body_names)
+            if contact_geom is not None:
+                terminated_by = "contact"
+                break
+
+            result = self.step(twist, dt)
+            step_fn()
+
+            current_pos = self.data.site_xpos[self.ee_site_id].copy()
+            distance += float(np.linalg.norm(current_pos - last_pos))
+            last_pos = current_pos
+
+            if result.achieved_fraction < self.config.min_progress:
+                terminated_by = "no_progress"
+                break
+
+        return MoveUntilTouchResult(
+            success=(terminated_by == "contact"),
+            terminated_by=terminated_by,
+            distance_moved=distance,
+            contact_geom=contact_geom,
+        )
+
     def _get_ee_pose(self) -> np.ndarray:
         T = np.eye(4)
         T[:3, :3] = self.data.site_xmat[self.ee_site_id].reshape(3, 3)

@@ -559,3 +559,62 @@ class TestCartesianController:
         assert result.terminated_by == "condition"
         pos_err = np.linalg.norm(target[:3, 3] - data.site_xpos[ee_id])
         assert pos_err < 0.01
+
+    def test_move_until_contact_terminates_by_max_distance(self, model_and_data, arm_indices):
+        """Without contact, move_until_contact stops at max_distance."""
+        from unittest.mock import patch
+
+        model, data = model_and_data
+        qpos_idx, qvel_idx, ee_id = arm_indices
+        controller = CartesianController(
+            model, data, ee_id, qpos_idx, qvel_idx,
+            q_min=np.array([-3.14, -3.14]), q_max=np.array([3.14, 3.14]),
+            qd_max=np.array([2.0, 2.0]),
+            config=CartesianControlConfig(length_scale=10.0, min_progress=0.0),
+        )
+
+        # Patch check_gripper_contact to always return None (no contact)
+        with patch("mj_manipulator.cartesian.check_gripper_contact", return_value=None):
+            result = controller.move_until_contact(
+                twist=np.array([0, 0.05, 0, 0, 0, 0]),
+                dt=0.004,
+                gripper_body_names=["link2"],
+                max_distance=0.01,
+            )
+
+        assert not result.success
+        assert result.terminated_by == "max_distance"
+        assert result.distance_moved >= 0.01
+        assert result.contact_geom is None
+
+    def test_move_until_contact_stops_on_contact(self, model_and_data, arm_indices):
+        """move_until_contact returns success=True when contact is detected."""
+        from unittest.mock import patch
+
+        model, data = model_and_data
+        qpos_idx, qvel_idx, ee_id = arm_indices
+        controller = CartesianController(
+            model, data, ee_id, qpos_idx, qvel_idx,
+            q_min=np.array([-3.14, -3.14]), q_max=np.array([3.14, 3.14]),
+            qd_max=np.array([2.0, 2.0]),
+            config=CartesianControlConfig(length_scale=10.0, min_progress=0.0),
+        )
+
+        call_count = [0]
+
+        def fake_contact(model, data, body_names):
+            call_count[0] += 1
+            # Return a contact after 3 steps so the controller has moved first
+            return "obstacle" if call_count[0] >= 3 else None
+
+        with patch("mj_manipulator.cartesian.check_gripper_contact", side_effect=fake_contact):
+            result = controller.move_until_contact(
+                twist=np.array([0, 0.05, 0, 0, 0, 0]),
+                dt=0.004,
+                gripper_body_names=["link2"],
+                max_distance=1.0,
+            )
+
+        assert result.success
+        assert result.terminated_by == "contact"
+        assert result.contact_geom == "obstacle"
