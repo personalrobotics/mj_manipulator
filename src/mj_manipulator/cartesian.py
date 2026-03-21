@@ -478,6 +478,7 @@ class CartesianController:
         qd_max: np.ndarray,
         config: CartesianControlConfig | None = None,
         grasp_manager: "GraspManager | None" = None,
+        step_fn: "Callable[[], None] | None" = None,
     ):
         """
         Args:
@@ -493,6 +494,9 @@ class CartesianController:
             grasp_manager: Optional grasp manager for updating attached object
                 poses during motion. If provided, attached objects follow the
                 gripper automatically during step/move/move_to.
+            step_fn: Function to advance the simulation after each control step.
+                In physics mode, this should call mj_step (via ctx.step()) so
+                dynamics are simulated. Defaults to mj_forward (kinematic).
         """
         self.model = model
         self.data = data
@@ -504,6 +508,7 @@ class CartesianController:
         self.qd_max = qd_max
         self.config = config or CartesianControlConfig()
         self.grasp_manager = grasp_manager
+        self._default_step_fn = step_fn
         self._q_dot_prev: np.ndarray | None = None
 
     @classmethod
@@ -511,6 +516,7 @@ class CartesianController:
         cls,
         arm: "Arm",
         config: CartesianControlConfig | None = None,
+        step_fn: "Callable[[], None] | None" = None,
     ) -> "CartesianController":
         """Create a CartesianController from an Arm instance."""
         q_min, q_max = arm.get_joint_limits()
@@ -525,6 +531,7 @@ class CartesianController:
             qd_max=arm.config.kinematic_limits.velocity,
             config=config,
             grasp_manager=arm.grasp_manager,
+            step_fn=step_fn,
         )
 
     def reset(self) -> None:
@@ -606,6 +613,8 @@ class CartesianController:
             TwistExecutionResult describing why motion terminated.
         """
         if step_fn is None:
+            step_fn = self._default_step_fn
+        if step_fn is None:
             def step_fn():
                 mujoco.mj_forward(self.model, self.data)
 
@@ -675,6 +684,8 @@ class CartesianController:
             TwistExecutionResult. ``terminated_by == "condition"`` means
             the target was reached within tolerance.
         """
+        if step_fn is None:
+            step_fn = self._default_step_fn
         if step_fn is None:
             def step_fn():
                 mujoco.mj_forward(self.model, self.data)
@@ -750,6 +761,8 @@ class CartesianController:
         Returns:
             MoveUntilTouchResult. ``success=True`` if contact was detected.
         """
+        if step_fn is None:
+            step_fn = self._default_step_fn
         if step_fn is None:
             def step_fn():
                 mujoco.mj_forward(self.model, self.data)

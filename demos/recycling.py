@@ -313,7 +313,9 @@ def setup_franka():
 
 def cartesian_lift(ctx: SimContext, arm: Arm, height: float = 0.05) -> None:
     """Lift the EE straight up using Jacobian-based cartesian control."""
-    ctrl = CartesianController.from_arm(arm)
+    # In physics mode, pass ctx.step so mj_step runs (friction holds object).
+    step_fn = ctx.step if ctx._controller is not None else None
+    ctrl = CartesianController.from_arm(arm, step_fn=step_fn)
     ctrl.move(
         np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),  # 10 cm/s upward
         dt=0.004,
