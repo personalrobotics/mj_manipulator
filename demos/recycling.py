@@ -58,6 +58,7 @@ from mj_manipulator.menagerie import menagerie_scene
 from mj_manipulator.sim_context import SimContext
 from prl_assets import OBJECTS_DIR
 from tsr.hands import FrankaHand, Robotiq2F140
+from tsr.placement import TablePlacer
 
 if TYPE_CHECKING:
     from mj_manipulator.arm import Arm
@@ -137,6 +138,17 @@ def compute_place_pose() -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
+def _add_table(spec: mujoco.MjSpec, pos: list[float], size: list[float]) -> None:
+    """Add a simple table to the scene."""
+    table = spec.worldbody.add_body()
+    table.name = "table"
+    table.pos = pos
+    g = table.add_geom()
+    g.type = mujoco.mjtGeom.mjGEOM_BOX
+    g.size = size
+    g.rgba = [0.4, 0.3, 0.2, 1.0]
+
+
 def _attach_objects(spec: mujoco.MjSpec, can_positions: list[list[float]]) -> None:
     """Attach prl_assets cans + recycle bin to the spec via MjSpec.
 
@@ -178,13 +190,21 @@ def setup_ur5e():
     frame.quat = [-1, 1, 0, 0]
     frame.attach_body(robotiq_spec.worldbody.first_body(), prefix="gripper/")
 
-    # Three cans on the table (surface at z ≈ 0.46 in menagerie scene), all at y < 0.
-    table_z = 0.46
-    can_positions = [
-        [0.40, -0.15, table_z],
-        [0.50, -0.15, table_z],
-        [0.45, -0.28, table_z],
-    ]
+    # Add table and sample can placements using TSR
+    table_half = [0.15, 0.15, 0.23]  # 30x30cm surface, 46cm tall
+    table_center = [0.45, -0.20, table_half[2]]
+    _add_table(spec, pos=table_center, size=table_half)
+
+    table_surface = np.eye(4)
+    table_surface[:3, 3] = [table_center[0], table_center[1], table_half[2] * 2]
+    placer = TablePlacer(table_half[0], table_half[1])
+    place_templates = placer.place_cylinder(_CAN_GP["radius"], _CAN_GP["height"])
+
+    can_positions = []
+    for _ in range(3):
+        tsr = place_templates[0].instantiate(table_surface)
+        pose = tsr.sample()
+        can_positions.append(list(pose[:3, 3]))
     _attach_objects(spec, can_positions)
 
     model = spec.compile()
@@ -212,13 +232,21 @@ def setup_franka():
     spec = mujoco.MjSpec.from_file(str(FRANKA_SCENE))
     add_franka_ee_site(spec)
 
-    # Three cans on the table (surface at z ≈ 0.46 in menagerie scene), all at y < 0.
-    table_z = 0.46
-    can_positions = [
-        [0.40, -0.15, table_z],
-        [0.48, -0.15, table_z],
-        [0.44, -0.28, table_z],
-    ]
+    # Add table and sample can placements using TSR
+    table_half = [0.15, 0.15, 0.23]
+    table_center = [0.45, -0.20, table_half[2]]
+    _add_table(spec, pos=table_center, size=table_half)
+
+    table_surface = np.eye(4)
+    table_surface[:3, 3] = [table_center[0], table_center[1], table_half[2] * 2]
+    placer = TablePlacer(table_half[0], table_half[1])
+    place_templates = placer.place_cylinder(_CAN_GP["radius"], _CAN_GP["height"])
+
+    can_positions = []
+    for _ in range(3):
+        tsr = place_templates[0].instantiate(table_surface)
+        pose = tsr.sample()
+        can_positions.append(list(pose[:3, 3]))
     _attach_objects(spec, can_positions)
 
     model = spec.compile()
