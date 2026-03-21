@@ -43,7 +43,7 @@ import mujoco
 import numpy as np
 from asset_manager import AssetManager
 from mj_environment import Environment
-from mj_manipulator.cartesian import step_twist
+from mj_manipulator.cartesian import CartesianController
 from mj_manipulator.arms.franka import (
     FRANKA_HOME,
     add_franka_ee_site,
@@ -244,38 +244,13 @@ def setup_franka():
 
 
 def cartesian_lift(ctx: SimContext, arm: Arm, height: float = 0.05) -> None:
-    """Lift the EE straight up using Jacobian-based cartesian control.
-
-    Bypasses CBiRRT — used immediately after grasping to clear the object
-    off the table before planning the place motion. (The collision checker
-    flags grasped-object-table contacts as invalid at the start config.)
-    """
-    model = arm.env.model
-    data  = arm.env.data
-    q_lower, q_upper = arm.get_joint_limits()
-    qd_max = arm.config.kinematic_limits.velocity
-
-    lift_speed = 0.10  # m/s
-    dt         = 0.004
-    n_steps    = max(1, int(height / (lift_speed * dt)))
-    twist      = np.array([0.0, 0.0, lift_speed, 0.0, 0.0, 0.0])
-
-    q_dot_prev = None
-    for _ in range(n_steps):
-        q_new, result = step_twist(
-            model, data,
-            arm.ee_site_id,
-            arm.joint_qpos_indices,
-            arm.joint_qvel_indices,
-            q_min=q_lower, q_max=q_upper, qd_max=qd_max,
-            twist=twist, dt=dt, q_dot_prev=q_dot_prev,
-        )
-        q_dot_prev = result.joint_velocities
-        for j, idx in enumerate(arm.joint_qpos_indices):
-            data.qpos[idx] = q_new[j]
-        if arm.grasp_manager is not None:
-            arm.grasp_manager.update_attached_poses(data)
-        mujoco.mj_forward(model, data)
+    """Lift the EE straight up using Jacobian-based cartesian control."""
+    ctrl = CartesianController.from_arm(arm)
+    ctrl.move(
+        np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),  # 10 cm/s upward
+        dt=0.004,
+        max_distance=height,
+    )
     ctx.sync()
 
 

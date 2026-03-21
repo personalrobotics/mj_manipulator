@@ -27,6 +27,7 @@ from mj_manipulator.contacts import iter_contacts
 
 if TYPE_CHECKING:
     from mj_manipulator.arm import Arm
+    from mj_manipulator.grasp_manager import GraspManager
 
 logger = logging.getLogger(__name__)
 
@@ -476,6 +477,7 @@ class CartesianController:
         q_max: np.ndarray,
         qd_max: np.ndarray,
         config: CartesianControlConfig | None = None,
+        grasp_manager: "GraspManager | None" = None,
     ):
         """
         Args:
@@ -488,6 +490,9 @@ class CartesianController:
             q_max: Upper joint position limits (rad).
             qd_max: Maximum joint velocities (rad/s).
             config: Control configuration (uses defaults if None).
+            grasp_manager: Optional grasp manager for updating attached object
+                poses during motion. If provided, attached objects follow the
+                gripper automatically during step/move/move_to.
         """
         self.model = model
         self.data = data
@@ -498,6 +503,7 @@ class CartesianController:
         self.q_max = q_max
         self.qd_max = qd_max
         self.config = config or CartesianControlConfig()
+        self.grasp_manager = grasp_manager
         self._q_dot_prev: np.ndarray | None = None
 
     @classmethod
@@ -518,6 +524,7 @@ class CartesianController:
             q_max=q_max,
             qd_max=arm.config.kinematic_limits.velocity,
             config=config,
+            grasp_manager=arm.grasp_manager,
         )
 
     def reset(self) -> None:
@@ -564,6 +571,8 @@ class CartesianController:
         self._q_dot_prev = result.joint_velocities
         for i, idx in enumerate(self.joint_qpos_indices):
             self.data.qpos[idx] = q_new[i]
+        if self.grasp_manager is not None:
+            self.grasp_manager.update_attached_poses(self.data)
         return result
 
     def move(
