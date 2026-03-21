@@ -220,6 +220,9 @@ def _compile_and_create_arm(spec, robot_type):
         gripper = FrankaGripper(env.model, env.data, "franka", grasp_manager=gm)
         arm = create_franka_arm(env, gripper=gripper, grasp_manager=gm)
         gripper.kinematic_open()  # default qpos=0 is fully closed
+        # Set actuator ctrl to hold fingers open in physics mode
+        if gripper.actuator_id is not None:
+            env.data.ctrl[gripper.actuator_id] = gripper.ctrl_open
         home = FRANKA_HOME
 
     for i, idx in enumerate(arm.joint_qpos_indices):
