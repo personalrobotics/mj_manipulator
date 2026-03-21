@@ -122,12 +122,8 @@ def make_grasp_tsrs(T_center: np.ndarray, robot_type: str) -> list:
     hand = _FRANKA if robot_type == "franka" else _ROBOTIQ
     T_bottom = T_center.copy()
     T_bottom[2, 3] -= _CAN_GP["height"] / 2   # centre → bottom
-    # Use side grasps only — more stable for cylindrical objects
+    # Side grasps only — more stable for cylindrical objects
     templates = hand.grasp_cylinder_side(_CAN_GP["radius"], _CAN_GP["height"])
-    # Filter to deep grasps (shallow grasps grip at fingertips and drop in physics)
-    templates = [t for t in templates if "deep" in t.name.lower()]
-    if not templates:
-        templates = hand.grasp_cylinder_side(_CAN_GP["radius"], _CAN_GP["height"])
     return [t.instantiate(T_bottom) for t in templates]
 
 
@@ -209,9 +205,48 @@ def _add_table_and_cans(spec: mujoco.MjSpec, n_cans: int = 3) -> None:
     _attach_objects(spec, can_positions)
 
 
+def _fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) -> None:
+    """Scale Franka gripper actuator to match real hardware grip force.
+
+    The menagerie model's actuator8 under-produces grip force. The real
+    Franka hand grips at 140N (70N per finger). We scale both gain and
+    bias proportionally so the actuator reaches target_force at full close
+    while ctrl=255 can still hold the fingers open.
+
+    Args:
+        model: Compiled MjModel (modified in place).
+        target_force: Desired grip force at full close [N]. Default 140N
+            from the Franka Emika datasheet.
+    """
+    aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
+    if aid < 0:
+        return
+
+    # Actuator force model: force = gain * ctrl + bias[1] * length + bias[2] * velocity
+    # To grip at target_force when ctrl=0 and grasping a typical object:
+    #   target_force = |bias[1]| * length_grasp
+    # To hold open when ctrl=255:
+    #   gain * 255 = |bias[1]| * length_open  (zero net force)
+    length_open = 0.08  # 2 × finger_joint open position (0.04m each)
+    length_grasp = 0.066  # typical grasp (e.g., soda can r=33mm)
+
+    new_bias1 = -target_force / length_grasp
+    new_gain = abs(new_bias1) * length_open / 255.0
+
+    # Scale damping proportionally to bias spring
+    old_bias1 = model.actuator_biasprm[aid, 1]
+    scale = new_bias1 / old_bias1 if old_bias1 != 0 else 1.0
+
+    model.actuator_biasprm[aid, 1] = new_bias1
+    model.actuator_biasprm[aid, 2] *= scale
+    model.actuator_gainprm[aid, 0] = new_gain
+
+
 def _compile_and_create_arm(spec, robot_type):
     """Compile spec, create Environment + Arm + Gripper."""
     model = spec.compile()
+    if robot_type == "franka":
+        _fix_franka_grip_force(model)
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
     env = Environment.from_model(model, data)
