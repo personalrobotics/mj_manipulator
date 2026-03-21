@@ -331,7 +331,10 @@ def pickup(ctx: SimContext, arm: Arm, body_name: str, robot_type: str) -> bool:
     T_center   = arm.env.get_body_pose(body_name)
     grasp_tsrs = make_grasp_tsrs(T_center, robot_type)
 
-    path = arm.plan_to_tsrs(grasp_tsrs, timeout=10.0)
+    try:
+        path = arm.plan_to_tsrs(grasp_tsrs, timeout=10.0)
+    except Exception:
+        path = None
     if path is None:
         logger.warning("Grasp planning failed for %s", body_name)
         return False
