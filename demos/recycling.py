@@ -200,11 +200,17 @@ def setup_ur5e():
     placer = TablePlacer(table_half[0], table_half[1])
     place_templates = placer.place_cylinder(_CAN_GP["radius"], _CAN_GP["height"])
 
+    # The can XML has body pos="0 0 0.0615" (half-height offset from parent
+    # frame), so the attach frame should be at the table surface, not at the
+    # can's geometric center.
+    can_body_offset_z = _CAN_GP["height"] / 2
     can_positions = []
     for _ in range(3):
         tsr = place_templates[0].instantiate(table_surface)
         pose = tsr.sample()
-        can_positions.append(list(pose[:3, 3]))
+        pos = list(pose[:3, 3])
+        pos[2] -= can_body_offset_z
+        can_positions.append(pos)
     _attach_objects(spec, can_positions)
 
     model = spec.compile()
@@ -242,11 +248,17 @@ def setup_franka():
     placer = TablePlacer(table_half[0], table_half[1])
     place_templates = placer.place_cylinder(_CAN_GP["radius"], _CAN_GP["height"])
 
+    # The can XML has body pos="0 0 0.0615" (half-height offset from parent
+    # frame), so the attach frame should be at the table surface, not at the
+    # can's geometric center.
+    can_body_offset_z = _CAN_GP["height"] / 2
     can_positions = []
     for _ in range(3):
         tsr = place_templates[0].instantiate(table_surface)
         pose = tsr.sample()
-        can_positions.append(list(pose[:3, 3]))
+        pos = list(pose[:3, 3])
+        pos[2] -= can_body_offset_z
+        can_positions.append(pos)
     _attach_objects(spec, can_positions)
 
     model = spec.compile()
