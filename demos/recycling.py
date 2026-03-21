@@ -429,33 +429,55 @@ def run_recycling(
                 env.data.ctrl[arm.gripper.actuator_id] = arm.gripper.ctrl_open
             ctx.sync()
 
+        def recover():
+            """Release any held object, retract up, return home."""
+            # Release anything held
+            ctx.arm(arm.config.name).release()
+            # Cartesian retract upward to clear collisions
+            ctrl = CartesianController.from_arm(arm, step_fn=step_fn)
+            ctrl.move(np.array([0., 0., 0.10, 0., 0., 0.]), dt=0.004, max_distance=0.10)
+            # Plan home
+            try:
+                home_path = arm.plan_to_configuration(home, timeout=10.0)
+            except Exception:
+                home_path = None
+            if home_path is not None:
+                ctx.execute(arm.retime(home_path))
+            ctx.sync()
+
+        step_fn = ctx.step if ctx._controller is not None else None
+
         for cycle, body_name in enumerate(CAN_BODY_NAMES[:cycles], 1):
             print(f"\n--- Cycle {cycle}: {body_name} ---")
             print(f"  Can at: {env.get_body_pose(body_name)[:3, 3].round(3)}")
 
             if not pickup(ctx, arm, body_name, robot_type):
                 print(f"  FAILED to pick up {body_name}")
+                recover()
                 continue
 
             print(f"  Picked up {body_name}")
 
             if not place(ctx, arm, body_name):
                 print(f"  FAILED to place {body_name}")
+                recover()
                 continue
 
             print(f"  Dropped {body_name} into bin")
 
-            # In kinematic mode, hide the object so it doesn't float in the air.
-            # In physics mode the can physically falls into the bin on release.
             if not physics:
                 env.hide_freebody(body_name)
 
-            home_path = arm.plan_to_configuration(home, timeout=10.0)
+            try:
+                home_path = arm.plan_to_configuration(home, timeout=10.0)
+            except Exception:
+                home_path = None
             if home_path is not None:
                 ctx.execute(arm.retime(home_path))
                 print("  Returned to home")
             else:
-                print("  Could not plan home path — skipping")
+                print("  Could not plan home — recovering")
+                recover()
 
             ctx.sync()
 
