@@ -90,8 +90,8 @@ class FrankaGripper(_BaseGripper):
             actuator_name=actuator_name,
             gripper_body_names=body_names,
             attachment_body=attachment_body,
-            ctrl_open=0.0,
-            ctrl_closed=255.0,
+            ctrl_open=255.0,
+            ctrl_closed=0.0,
             grasp_manager=grasp_manager,
         )
 
