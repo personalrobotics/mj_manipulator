@@ -241,48 +241,27 @@ def run(robot_type, *, physics=False, headless=False, cycles=3):
         # Set place TSRs once (same for all cycles)
         bb.set(f"{ns}/place_tsrs", make_place_tsrs())
 
-        for cycle in range(1, cycles + 1):
+        for cycle, body_name in enumerate(CAN_BODY_NAMES[:cycles], 1):
             if not ctx.is_running():
                 break
 
-            # Combine grasp TSRs from ALL remaining cans
-            all_grasp_tsrs = []
-            remaining_cans = []
-            for body_name in CAN_BODY_NAMES:
-                try:
-                    T_center = env.get_body_pose(body_name)
-                except Exception:
-                    continue
-                # Skip hidden/removed cans
-                if abs(T_center[2, 3]) < 0.01:
-                    continue
-                tsrs = make_grasp_tsrs(T_center, robot_type)
-                all_grasp_tsrs.extend(tsrs)
-                remaining_cans.append(body_name)
+            print(f"\n--- Cycle {cycle}: {body_name} ---")
+            T_center = env.get_body_pose(body_name)
+            print(f"  Can at: {T_center[:3, 3].round(3)}")
 
-            if not remaining_cans:
-                print(f"\n--- Cycle {cycle}: No cans remaining ---")
-                break
+            # Set per-cycle blackboard values
+            bb.set(f"{ns}/grasp_tsrs", make_grasp_tsrs(T_center, robot_type))
+            bb.set(f"{ns}/object_name", body_name)
 
-            print(f"\n--- Cycle {cycle}: {len(remaining_cans)} cans, {len(all_grasp_tsrs)} TSRs ---")
-
-            # Set grasp TSRs (all cans combined) and a placeholder object name
-            # (the actual grasped object is detected by the Grasp node)
-            bb.set(f"{ns}/grasp_tsrs", all_grasp_tsrs)
-            bb.set(f"{ns}/object_name", remaining_cans[0])  # closest/first
-
-            # Reset tree for new cycle
+            # Reset tree and tick (synchronous — runs full pickup+place in one tick)
             for node in root.iterate():
                 node.status = Status.INVALID
-
-            # Tick entire tree (pickup → place in one tick since all nodes are synchronous)
             tree.tick()
 
             if root.status == Status.SUCCESS:
-                grasped = bb.get(f"{ns}/grasped")
-                print(f"  Picked and placed {grasped}")
+                print(f"  Picked up and placed {body_name}")
                 if not physics:
-                    env.hide_freebody(grasped)
+                    env.hide_freebody(body_name)
                 # Return home
                 try:
                     home_path = arm.plan_to_configuration(home, timeout=10.0)
@@ -291,7 +270,7 @@ def run(robot_type, *, physics=False, headless=False, cycles=3):
                 if home_path is not None:
                     ctx.execute(arm.retime(home_path))
             else:
-                print(f"  Cycle failed (recovery attempted)")
+                print(f"  FAILED (recovery attempted)")
 
             ctx.sync()
 
