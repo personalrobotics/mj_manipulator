@@ -154,7 +154,7 @@ class Grasp(_ManipulationNode):
         super().__init__(name, ns)
         self.bb.register_key(key="/context", access=Access.READ)
         self.bb.register_key(key=self._key("arm_name"), access=Access.READ)
-        self.bb.register_key(key=self._key("object_name"), access=Access.READ)
+        self.bb.register_key(key=self._key("object_name"), access=Access.WRITE)
         self.bb.register_key(key=self._key("grasped"), access=Access.WRITE)
         self.bb.register_key(key=self._key("goal_tsr_index"), access=Access.READ)
         self.bb.register_key(key=self._key("tsr_to_object"), access=Access.READ)
@@ -175,6 +175,8 @@ class Grasp(_ManipulationNode):
 
         grasped = ctx.arm(arm_name).grasp(obj)
         self.bb.set(self._key("grasped"), grasped)
+        if grasped:
+            self.bb.set(self._key("object_name"), obj)
         return Status.SUCCESS if grasped else Status.FAILURE
 
 
