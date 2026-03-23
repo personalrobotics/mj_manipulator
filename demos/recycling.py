@@ -324,35 +324,42 @@ def cartesian_lift(ctx: SimContext, arm: Arm, height: float = 0.05) -> None:
     ctx.sync()
 
 
-def pickup(ctx: SimContext, arm: Arm, body_name: str, robot_type: str) -> bool:
-    """Plan to a TSR-sampled grasp pose, execute, close gripper, lift."""
-    logger.info("Planning grasp for %s...", body_name)
+def pickup(
+    ctx: SimContext, arm: Arm, grasp_tsrs: list,
+    tsr_to_object: list[str],
+) -> str | None:
+    """Plan to any grasp TSR, execute, close gripper, lift.
 
-    T_center   = arm.env.get_body_pose(body_name)
-    grasp_tsrs = make_grasp_tsrs(T_center, robot_type)
+    Returns the name of the grasped object, or None on failure.
+    """
+    logger.info("Planning grasp (%d TSRs)...", len(grasp_tsrs))
 
     try:
-        path = arm.plan_to_tsrs(grasp_tsrs, timeout=10.0)
+        result = arm.plan_to_tsrs(grasp_tsrs, timeout=10.0, return_details=True)
     except Exception:
-        path = None
-    if path is None:
-        logger.warning("Grasp planning failed for %s", body_name)
-        return False
+        result = None
+    if result is None or not result.success:
+        logger.warning("Grasp planning failed")
+        return None
 
-    traj = arm.retime(path)
+    # Determine which object the planner chose
+    body_name = tsr_to_object[result.goal_index]
+    logger.info("Planner chose %s (TSR %d)", body_name, result.goal_index)
+
+    traj = arm.retime(result.path)
     logger.info("Executing grasp (%d waypoints, %.2fs)...", traj.num_waypoints, traj.duration)
     if not ctx.execute(traj):
         logger.warning("Grasp execution failed")
-        return False
+        return None
 
     logger.info("Closing gripper on %s...", body_name)
     grasped = ctx.arm(arm.config.name).grasp(body_name)
     if not grasped:
         logger.warning("Grasp failed for %s", body_name)
-        return False
+        return None
 
     cartesian_lift(ctx, arm, height=0.10)
-    return True
+    return grasped
 
 
 def place(ctx: SimContext, arm: Arm, body_name: str) -> bool:
@@ -447,26 +454,41 @@ def run_recycling(
 
         step_fn = ctx.step if ctx._controller is not None else None
 
-        for cycle, body_name in enumerate(CAN_BODY_NAMES[:cycles], 1):
-            print(f"\n--- Cycle {cycle}: {body_name} ---")
-            print(f"  Can at: {env.get_body_pose(body_name)[:3, 3].round(3)}")
+        remaining = list(CAN_BODY_NAMES[:cycles])
 
-            if not pickup(ctx, arm, body_name, robot_type):
-                print(f"  FAILED to pick up {body_name}")
+        for cycle in range(1, cycles + 1):
+            if not ctx.is_running() or not remaining:
+                break
+
+            # Combine TSRs from all remaining cans
+            all_tsrs, tsr_to_object = [], []
+            for body_name in remaining:
+                T_center = env.get_body_pose(body_name)
+                tsrs = make_grasp_tsrs(T_center, robot_type)
+                for _ in tsrs:
+                    tsr_to_object.append(body_name)
+                all_tsrs.extend(tsrs)
+
+            print(f"\n--- Cycle {cycle}: {len(remaining)} cans, {len(all_tsrs)} TSRs ---")
+
+            grasped = pickup(ctx, arm, all_tsrs, tsr_to_object)
+            if grasped is None:
+                print(f"  FAILED to pick up any can")
                 recover()
                 continue
 
-            print(f"  Picked up {body_name}")
+            print(f"  Picked up {grasped}")
 
-            if not place(ctx, arm, body_name):
-                print(f"  FAILED to place {body_name}")
+            if not place(ctx, arm, grasped):
+                print(f"  FAILED to place {grasped}")
                 recover()
                 continue
 
-            print(f"  Dropped {body_name} into bin")
+            print(f"  Dropped {grasped} into bin")
 
             if not physics:
-                env.hide_freebody(body_name)
+                env.hide_freebody(grasped)
+            remaining.remove(grasped)
 
             try:
                 home_path = arm.plan_to_configuration(home, timeout=10.0)
