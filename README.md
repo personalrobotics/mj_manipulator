@@ -153,6 +153,29 @@ mj_environment  →  mj_manipulator  →  geodude (UR5e + Robotiq)
 
 Robot-specific code (joint names, limits, IK config) lives in `arms/<robot>.py`. The generic layer (`Arm`, protocols, executors) knows nothing about specific robots.
 
+## Non-Arm Entities (Bases, Linear Actuators)
+
+SimContext supports arbitrary controllable entities alongside arms. An entity is any object with `joint_qpos_indices`, `joint_qvel_indices`, `actuator_ids` (lists of ints), and optionally a `grasp_manager`. This is used for linear bases, mobile bases, or any actuated DOF that isn't an arm.
+
+```python
+# Entity must expose these properties:
+# - joint_qpos_indices: list[int]
+# - joint_qvel_indices: list[int]
+# - actuator_ids: list[int]
+# - grasp_manager (optional): for tracking attached objects
+
+with SimContext(model, data, arms, entities={"left_base": base}) as ctx:
+    # Base trajectories execute through the same path as arm trajectories
+    base_traj = base.plan_to(0.3)
+    ctx.execute(base_traj)  # physics continues during base motion
+
+    # PlanResult can include both base and arm trajectories
+    # (base executes first, then arm)
+    ctx.execute(plan_result)
+```
+
+In physics mode, entity actuators are controlled alongside arm actuators each step — no actuator is left uncontrolled. In kinematic mode, entities use KinematicExecutor (same as arms).
+
 ## Adding a New Arm
 
 `arms/ur5e.py` (6-DOF) and `arms/franka.py` (7-DOF) are the complete references. The steps:
