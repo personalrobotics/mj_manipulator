@@ -196,10 +196,12 @@ class SimContext:
         physics_config: PhysicsConfig | None = None,
         initial_positions: dict[str, np.ndarray] | None = None,
         viewer_fps: float = 30.0,
+        entities: dict[str, object] | None = None,
     ):
         self._model = model
         self._data = data
         self._arms = arms
+        self._entities = entities or {}
         self._physics = physics
         self._headless = headless
         self._viewer = viewer
@@ -389,7 +391,7 @@ class SimContext:
     # -- Internal setup -----------------------------------------------------
 
     def _setup_physics(self, viewer_sync_interval: float) -> None:
-        """Create PhysicsController and per-arm executor wrappers."""
+        """Create PhysicsController and per-arm/entity executor wrappers."""
         from mj_manipulator.physics_controller import PhysicsController
 
         exec_config = None
@@ -405,13 +407,17 @@ class SimContext:
             viewer=self._viewer,
             viewer_sync_interval=viewer_sync_interval,
             initial_positions=self._initial_positions,
+            entities=self._entities,
         )
 
         for name in self._arms:
             self._executors[name] = self._controller.get_executor(name)
 
+        for name in self._entities:
+            self._executors[name] = self._controller.get_entity_executor(name)
+
     def _setup_kinematic(self, viewer_sync_interval: float) -> None:
-        """Create per-arm KinematicExecutors."""
+        """Create per-arm and per-entity KinematicExecutors."""
         from mj_manipulator.executor import KinematicExecutor
 
         for name, arm in self._arms.items():
@@ -420,6 +426,16 @@ class SimContext:
                 arm.joint_qpos_indices,
                 viewer=self._viewer,
                 grasp_manager=arm.grasp_manager,
+                viewer_sync_interval=viewer_sync_interval,
+            )
+
+        for name, entity in self._entities.items():
+            gm = getattr(entity, "grasp_manager", None)
+            self._executors[name] = KinematicExecutor(
+                self._model, self._data,
+                entity.joint_qpos_indices,
+                viewer=self._viewer,
+                grasp_manager=gm,
                 viewer_sync_interval=viewer_sync_interval,
             )
 

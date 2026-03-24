@@ -48,6 +48,17 @@ class _ArmState:
 
 
 @dataclass
+class _EntityState:
+    """Per-entity state for non-arm controllable entities (e.g. linear bases)."""
+
+    actuator_ids: np.ndarray
+    joint_qpos_indices: np.ndarray
+    joint_qvel_indices: np.ndarray
+    target_position: np.ndarray
+    target_velocity: np.ndarray
+
+
+@dataclass
 class _GripperState:
     """Per-gripper state managed by PhysicsController."""
 
@@ -107,6 +118,7 @@ class PhysicsController:
         viewer=None,
         viewer_sync_interval: float = 0.033,
         initial_positions: dict[str, np.ndarray] | None = None,
+        entities: dict[str, object] | None = None,
     ):
         self.model = model
         self.data = data
@@ -153,10 +165,28 @@ class PhysicsController:
                     target_ctrl=data.ctrl[gripper.actuator_id],
                 )
 
+        # Build per-entity state (linear bases, etc.)
+        self._entities: dict[str, _EntityState] = {}
+        for name, entity in (entities or {}).items():
+            qpos_idx = np.array(entity.joint_qpos_indices, dtype=np.intp)
+            target_pos = data.qpos[qpos_idx].copy()
+            self._entities[name] = _EntityState(
+                actuator_ids=np.array(entity.actuator_ids, dtype=np.intp),
+                joint_qpos_indices=qpos_idx,
+                joint_qvel_indices=np.array(
+                    entity.joint_qvel_indices, dtype=np.intp,
+                ),
+                target_position=target_pos,
+                target_velocity=np.zeros(len(qpos_idx)),
+            )
+
         # Initialize qpos/qvel/ctrl to targets (prevents violent jumps)
         for state in self._arms.values():
             data.qpos[state.joint_qpos_indices] = state.target_position
             data.qvel[state.joint_qvel_indices] = 0.0
+            data.ctrl[state.actuator_ids] = state.target_position
+
+        for state in self._entities.values():
             data.ctrl[state.actuator_ids] = state.target_position
 
         mujoco.mj_forward(model, data)
@@ -202,6 +232,14 @@ class PhysicsController:
         """
         # Arm actuators: position + velocity feedforward
         for state in self._arms.values():
+            q_cmd = (
+                state.target_position
+                + self.lookahead_time * state.target_velocity
+            )
+            self.data.ctrl[state.actuator_ids] = q_cmd
+
+        # Entity actuators (bases, etc.): same feedforward
+        for state in self._entities.values():
             q_cmd = (
                 state.target_position
                 + self.lookahead_time * state.target_velocity
@@ -475,6 +513,47 @@ class PhysicsController:
             if sleep_dt > 0:
                 time.sleep(sleep_dt)
 
+    # -- Entity trajectory execution ----------------------------------------
+
+    def execute_entity(self, entity_name: str, trajectory: Trajectory) -> bool:
+        """Execute trajectory on an entity while arms and other entities hold.
+
+        Args:
+            entity_name: Entity identifier (e.g. "left_base").
+            trajectory: Time-parameterized trajectory.
+
+        Returns:
+            True if execution completed.
+        """
+        if entity_name not in self._entities:
+            raise ValueError(f"Unknown entity: {entity_name}")
+
+        state = self._entities[entity_name]
+
+        if trajectory.dof != len(state.joint_qpos_indices):
+            raise ValueError(
+                f"Trajectory DOF {trajectory.dof} doesn't match "
+                f"entity joint count {len(state.joint_qpos_indices)}"
+            )
+
+        sleep_dt = self.control_dt if self.viewer is not None else 0.0
+        for i in range(trajectory.num_waypoints):
+            state.target_position = trajectory.positions[i]
+            state.target_velocity = trajectory.velocities[i]
+            self.step()
+            if sleep_dt > 0:
+                time.sleep(sleep_dt)
+
+        state.target_position = trajectory.positions[-1].copy()
+        state.target_velocity = np.zeros(len(state.actuator_ids))
+        return True
+
+    def get_entity_executor(self, entity_name: str) -> EntityPhysicsExecutor:
+        """Get Executor interface for an entity (base, etc.)."""
+        if entity_name not in self._entities:
+            raise ValueError(f"Unknown entity: {entity_name}")
+        return EntityPhysicsExecutor(self, entity_name)
+
     # -- Executor interface -------------------------------------------------
 
     def get_executor(self, arm_name: str) -> ArmPhysicsExecutor:
@@ -527,3 +606,19 @@ class ArmPhysicsExecutor:
     def execute(self, trajectory: Trajectory) -> bool:
         """Execute trajectory on this arm."""
         return self.controller.execute(self.arm_name, trajectory)
+
+
+class EntityPhysicsExecutor:
+    """Executor interface for a non-arm entity, backed by PhysicsController.
+
+    Same pattern as ArmPhysicsExecutor but routes to execute_entity().
+    Obtained via :meth:`PhysicsController.get_entity_executor`.
+    """
+
+    def __init__(self, controller: PhysicsController, entity_name: str):
+        self.controller = controller
+        self.entity_name = entity_name
+
+    def execute(self, trajectory: Trajectory) -> bool:
+        """Execute trajectory on this entity."""
+        return self.controller.execute_entity(self.entity_name, trajectory)
