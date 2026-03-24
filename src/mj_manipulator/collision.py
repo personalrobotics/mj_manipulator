@@ -180,7 +180,7 @@ class CollisionChecker:
         self._update_attached_poses(data)
         mujoco.mj_forward(self.model, data)
 
-        print(f"Total contacts: {data.ncon}")
+        logger.debug("Total contacts: %d", data.ncon)
         self._count_invalid_contacts(data, debug=True)
 
     # -- Internal helpers --
@@ -293,17 +293,17 @@ class CollisionChecker:
                     body2, body2_name, body2_is_arm, body2_is_grasped,
                 ):
                     if debug:
-                        print(f"  [OK] Gripper-object: {body1_name} <-> {body2_name}")
+                        logger.debug("  [OK] Gripper-object: %s <-> %s", body1_name, body2_name)
                     continue
                 if debug:
-                    print(f"  [INVALID] Self-collision: {body1_name} <-> {body2_name}")
+                    logger.debug("  [INVALID] Self-collision: %s <-> %s", body1_name, body2_name)
                 invalid_count += 1
                 continue
 
             if debug:
                 robot = body1_name if body1_is_robot else body2_name
                 env = body2_name if body1_is_robot else body1_name
-                print(f"  [INVALID] Robot-environment: {robot} <-> {env}")
+                logger.debug("  [INVALID] Robot-environment: %s <-> %s", robot, env)
             invalid_count += 1
 
         return invalid_count
