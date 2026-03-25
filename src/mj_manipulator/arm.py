@@ -245,8 +245,11 @@ class Arm:
         frame. Requires ``ft_force_sensor`` and ``ft_torque_sensor`` to
         be set in ArmConfig.
 
-        In physics mode, MuJoCo populates sensor data each ``mj_step``.
-        In kinematic mode, sensor readings are zero (no dynamics).
+        .. warning::
+            Requires **physics mode** (``mj_step``). In kinematic mode
+            (``mj_forward`` only), force/torque sensors return zero —
+            MuJoCo does not compute contact or actuator forces without
+            physics simulation.
 
         Returns:
             np.ndarray of shape (6,): [fx, fy, fz, tx, ty, tz].
