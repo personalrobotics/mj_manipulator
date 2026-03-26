@@ -346,6 +346,15 @@ class SimContext:
         if self._viewer is not None:
             self._viewer.sync()
 
+    def hold(self) -> None:
+        """Update all controller targets to match current joint positions.
+
+        Call after externally modifying qpos (e.g. keyframe reset) to
+        prevent the controller from violently correcting to stale targets.
+        """
+        if self._controller is not None:
+            self._controller.hold_all()
+
     def is_running(self) -> bool:
         """Check if context is still active.
 
