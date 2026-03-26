@@ -142,6 +142,17 @@ class Arm:
         ik_solver: Optional IK solver for pose-based planning.
     """
 
+    env: Environment
+    config: ArmConfig
+    gripper: Gripper | None
+    grasp_manager: GraspManager | None
+    ik_solver: IKSolver | None
+    joint_ids: list[int]
+    joint_qpos_indices: list[int]
+    joint_qvel_indices: list[int]
+    ee_site_id: int
+    dof: int
+
     def __init__(
         self,
         env: Environment,
@@ -151,11 +162,11 @@ class Arm:
         grasp_manager: GraspManager | None = None,
         ik_solver: IKSolver | None = None,
     ):
-        self.env = env
-        self.config = config
-        self.gripper = gripper
-        self.grasp_manager = grasp_manager
-        self.ik_solver = ik_solver
+        self.env: Environment = env
+        self.config: ArmConfig = config
+        self.gripper: Gripper | None = gripper
+        self.grasp_manager: GraspManager | None = grasp_manager
+        self.ik_solver: IKSolver | None = ik_solver
 
         model = env.model
 
@@ -173,6 +184,7 @@ class Arm:
             self.joint_qvel_indices.append(model.jnt_dofadr[jid])
 
         # Resolve EE site
+        self.ee_site_id: int
         if config.ee_site:
             self.ee_site_id = mujoco.mj_name2id(
                 model, mujoco.mjtObj.mjOBJ_SITE, config.ee_site
@@ -197,7 +209,7 @@ class Arm:
                 self.actuator_ids.append(act_id)
 
         # Cache DOF and joint limits
-        self.dof = len(config.joint_names)
+        self.dof: int = len(config.joint_names)
         self._joint_limits: tuple[np.ndarray, np.ndarray] | None = None
 
         # Resolve F/T sensor indices (if configured)
