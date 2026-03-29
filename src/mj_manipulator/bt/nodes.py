@@ -62,9 +62,12 @@ class PlanToTSRs(_ManipulationNode):
         timeout = self.bb.get(self._key("timeout"))
         try:
             result = arm.plan_to_tsrs(tsrs, timeout=timeout, return_details=True)
-        except Exception:
-            result = None
+        except Exception as e:
+            self.feedback_message = str(e)
+            return Status.FAILURE
         if result is None or not result.success:
+            reason = getattr(result, "failure_reason", None) if result else None
+            self.feedback_message = reason or "Planning failed"
             return Status.FAILURE
         self.bb.set(self._key("path"), result.path)
         self.bb.set(self._key("goal_tsr_index"), result.goal_index)
@@ -91,9 +94,11 @@ class PlanToConfig(_ManipulationNode):
         timeout = self.bb.get(self._key("timeout"))
         try:
             path = arm.plan_to_configuration(goal, timeout=timeout)
-        except Exception:
-            path = None
+        except Exception as e:
+            self.feedback_message = str(e)
+            return Status.FAILURE
         if path is None:
+            self.feedback_message = "Planning to configuration failed"
             return Status.FAILURE
         self.bb.set(self._key("path"), path)
         return Status.SUCCESS
