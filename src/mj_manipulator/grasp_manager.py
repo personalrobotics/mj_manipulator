@@ -91,6 +91,17 @@ class GraspManager:
         gripper_body_name, _ = self._attachments[object_name]
         return gripper_body_name
 
+    def get_grasp_transform(self, object_name: str) -> np.ndarray | None:
+        """Get the grasp transform T_gripper_object for an attached object.
+
+        Returns the 4x4 transform from gripper frame to object frame,
+        recorded at grasp time.  Returns None if the object is not attached.
+        """
+        if object_name not in self._attachments:
+            return None
+        _, T_gripper_object = self._attachments[object_name]
+        return T_gripper_object.copy()
+
     def update_attached_poses(self, data: mujoco.MjData | None = None) -> None:
         """Update poses of all kinematically attached objects.
 
