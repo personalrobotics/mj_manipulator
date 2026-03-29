@@ -55,6 +55,7 @@ class PlanToTSRs(_ManipulationNode):
         self.bb.register_key(key=self._key("timeout"), access=Access.READ)
         self.bb.register_key(key=self._key("path"), access=Access.WRITE)
         self.bb.register_key(key=self._key("goal_tsr_index"), access=Access.WRITE)
+        self.bb.register_key(key=self._key("plan_failure_reason"), access=Access.WRITE)
 
     def update(self) -> Status:
         arm = self.bb.get(self._key("arm"))
@@ -63,12 +64,16 @@ class PlanToTSRs(_ManipulationNode):
         try:
             result = arm.plan_to_tsrs(tsrs, timeout=timeout, return_details=True)
         except Exception as e:
-            self.feedback_message = str(e)
+            reason = str(e)
+            self.feedback_message = reason
+            self.bb.set(self._key("plan_failure_reason"), reason)
             return Status.FAILURE
         if result is None or not result.success:
             reason = getattr(result, "failure_reason", None) if result else None
             self.feedback_message = reason or "Planning failed"
+            self.bb.set(self._key("plan_failure_reason"), reason or "Planning failed")
             return Status.FAILURE
+        self.bb.set(self._key("plan_failure_reason"), None)
         self.bb.set(self._key("path"), result.path)
         self.bb.set(self._key("goal_tsr_index"), result.goal_index)
         return Status.SUCCESS
