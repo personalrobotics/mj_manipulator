@@ -292,6 +292,24 @@ class Arm:
         torque = data.sensordata[self._ft_torque_adr:self._ft_torque_adr + 3]
         return np.concatenate([force, torque])
 
+    def get_ft_wrench_world(self) -> np.ndarray:
+        """Current wrist force/torque reading in the **world frame**.
+
+        Convenience wrapper around :meth:`get_ft_wrench` that rotates
+        the wrench from the sensor local frame to the world frame.
+
+        Returns:
+            np.ndarray of shape (6,): [fx, fy, fz, tx, ty, tz] in world frame.
+            All NaN if F/T is not valid (kinematic mode).
+        """
+        wrench = self.get_ft_wrench()
+        if np.isnan(wrench[0]):
+            return wrench
+        R = self.env.data.site_xmat[self.ft_site_id].reshape(3, 3)
+        force_world = R @ wrench[:3]
+        torque_world = R @ wrench[3:]
+        return np.concatenate([force_world, torque_world])
+
     @property
     def has_ft_sensor(self) -> bool:
         """Whether this arm has a wrist F/T sensor configured."""
