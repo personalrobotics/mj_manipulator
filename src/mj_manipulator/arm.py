@@ -168,6 +168,7 @@ class Arm:
         self.grasp_manager: GraspManager | None = grasp_manager
         self.ik_solver: IKSolver | None = ik_solver
         self.ft_valid: bool = False  # Set by ExecutionContext when F/T is meaningful
+        self._ft_tare_offset: np.ndarray = np.zeros(6)  # Tare baseline
 
         model = env.model
 
@@ -290,7 +291,7 @@ class Arm:
         data = self.env.data
         force = data.sensordata[self._ft_force_adr:self._ft_force_adr + 3]
         torque = data.sensordata[self._ft_torque_adr:self._ft_torque_adr + 3]
-        return np.concatenate([force, torque])
+        return np.concatenate([force, torque]) - self._ft_tare_offset
 
     def get_ft_wrench_world(self) -> np.ndarray:
         """Current wrist force/torque reading in the **world frame**.
@@ -309,6 +310,24 @@ class Arm:
         force_world = R @ wrench[:3]
         torque_world = R @ wrench[3:]
         return np.concatenate([force_world, torque_world])
+
+    def tare_ft(self) -> None:
+        """Zero the F/T sensor at the current reading (tare).
+
+        Records the current raw sensor reading as the baseline. All
+        subsequent ``get_ft_wrench()`` calls return the delta from
+        this baseline. Arm should be stationary when taring.
+
+        Matches UR5e's ``zero_ftsensor()`` URScript command.
+        """
+        if self._ft_force_adr is None or self._ft_torque_adr is None:
+            raise RuntimeError("No F/T sensor configured.")
+        if not self.ft_valid:
+            raise RuntimeError("F/T not valid (kinematic mode). Use physics mode to tare.")
+        data = self.env.data
+        force = data.sensordata[self._ft_force_adr:self._ft_force_adr + 3]
+        torque = data.sensordata[self._ft_torque_adr:self._ft_torque_adr + 3]
+        self._ft_tare_offset = np.concatenate([force, torque]).copy()
 
     @property
     def has_ft_sensor(self) -> bool:
