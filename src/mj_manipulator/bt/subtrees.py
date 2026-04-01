@@ -153,6 +153,51 @@ def pickup_with_recovery(ns: str) -> py_trees.composites.Selector:
     )
 
 
+def recover_keep_grasp(ns: str) -> py_trees.composites.Sequence:
+    """Recovery without releasing: retract up (if needed) → plan home → execute.
+
+    Same as recover() but keeps the grasp. Used for place failures where
+    dropping the object is worse than keeping it.
+    """
+    set_retract_twist = py_trees.behaviours.SetBlackboardVariable(
+        name="set_retract_twist",
+        variable_name=f"{ns}/twist",
+        variable_value=np.array([0.0, 0.0, 0.10, 0.0, 0.0, 0.0]),
+        overwrite=True,
+    )
+    set_retract_distance = py_trees.behaviours.SetBlackboardVariable(
+        name="set_retract_distance",
+        variable_name=f"{ns}/distance",
+        variable_value=0.10,
+        overwrite=True,
+    )
+
+    guarded_retract = py_trees.composites.Sequence(
+        name="retract_if_needed",
+        memory=True,
+        children=[
+            CheckNotNearConfig(ns=ns),
+            set_retract_twist,
+            set_retract_distance,
+            CartesianMove(ns=ns),
+        ],
+    )
+
+    return py_trees.composites.Sequence(
+        name="recover_keep_grasp",
+        memory=True,
+        children=[
+            py_trees.decorators.FailureIsSuccess(
+                name="optional_retract", child=guarded_retract,
+            ),
+            PlanToConfig(ns=ns),
+            Retime(ns=ns),
+            Execute(ns=ns),
+            Sync(ns=ns),
+        ],
+    )
+
+
 def place(ns: str) -> py_trees.composites.Sequence:
     """Place: plan to place TSRs → execute → release.
 
@@ -174,9 +219,8 @@ def place(ns: str) -> py_trees.composites.Sequence:
 def place_with_recovery(ns: str) -> py_trees.composites.Selector:
     """Place with fallback recovery on failure.
 
-    If place planning/execution fails, releases, retracts, returns home.
-    The Selector still returns FAILURE because recovery wraps with
-    SuccessIsFailure — cleanup succeeded but the task did not.
+    If place planning/execution fails, keeps the grasp and returns home.
+    Does NOT release the object — the caller can retry or release manually.
     """
     return py_trees.composites.Selector(
         name="place_or_recover",
@@ -184,7 +228,7 @@ def place_with_recovery(ns: str) -> py_trees.composites.Selector:
         children=[
             place(ns),
             py_trees.decorators.SuccessIsFailure(
-                name="recover_then_fail", child=recover(ns),
+                name="recover_then_fail", child=recover_keep_grasp(ns),
             ),
         ],
     )
