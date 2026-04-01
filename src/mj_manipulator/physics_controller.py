@@ -331,6 +331,8 @@ class PhysicsController:
         for i in range(trajectory.num_waypoints):
             if self._abort_fn is not None and self._abort_fn():
                 logger.info("Trajectory aborted at waypoint %d/%d", i, trajectory.num_waypoints)
+                # Zero velocity so arm holds position while other arms move
+                state.target_velocity = np.zeros(len(state.actuator_ids))
                 return False
             state.target_position = trajectory.positions[i]
             state.target_velocity = trajectory.velocities[i]
