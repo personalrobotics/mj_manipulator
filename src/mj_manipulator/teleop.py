@@ -281,7 +281,10 @@ class TeleopController:
 
         The actual grasp/release happens in the teleop loop thread
         which owns the MuJoCo data, avoiding data races.
+        Ignored if teleop is not active.
         """
+        if not self._active:
+            return
         with self._lock:
             self._gripper_toggle_requested = True
 
