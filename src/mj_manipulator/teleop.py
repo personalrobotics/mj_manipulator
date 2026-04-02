@@ -200,12 +200,6 @@ class TeleopController:
             self._state = TeleopState.IDLE
             return self._state
 
-        # Check abort flag (Stop button, reset, Ctrl+C)
-        abort_fn = getattr(self._ctx, '_abort_fn', None)
-        if abort_fn is not None and abort_fn():
-            self.deactivate()
-            return self._state
-
         # Read latest input (keep it for next step — gizmo only fires on drag)
         with self._lock:
             pose = self._target_pose
