@@ -291,8 +291,9 @@ class TeleopController:
         gripper = self._arm.gripper
         if gripper is None:
             return
-        gm = self._arm.grasp_manager
-        if gm is not None and gm.get_grasped_by(arm_name):
+        # Use gripper position to decide: > 0.5 = closed, < 0.5 = open
+        pos = gripper.get_actual_position()
+        if pos > 0.5:
             self._ctx.arm(arm_name).release()
         else:
             self._ctx.arm(arm_name).grasp()
