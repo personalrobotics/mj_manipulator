@@ -164,19 +164,19 @@ class TestPoseInput:
 
         np.testing.assert_array_almost_equal(ctx.last_q, q_close)
 
-    def test_rejects_large_joint_jump(self):
+    def test_large_joint_jump_still_tracks(self):
+        """Large IK jumps are allowed — physics/hardware handles smoothing."""
         q_far = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
         arm = MockArm(ik_solutions=[q_far])
         ctx = MockContext()
-        config = TeleopConfig(max_joint_delta=0.1)
-        ctrl = TeleopController(arm, ctx, config=config)
+        ctrl = TeleopController(arm, ctx)
         ctrl.activate()
 
         ctrl.set_target_pose(np.eye(4))
         state = ctrl.step()
 
-        assert state == TeleopState.UNREACHABLE
-        assert ctx.step_count == 0
+        assert state == TeleopState.TRACKING
+        assert ctx.step_count == 1
 
     def test_velocity_feedforward(self):
         q_solution = np.array([0.01, 0.02, 0.03, 0.01, 0.02, 0.03])

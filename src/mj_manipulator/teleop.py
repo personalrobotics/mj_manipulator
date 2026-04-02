@@ -69,10 +69,6 @@ class SafetyMode(Enum):
 class TeleopConfig:
     """Configuration for TeleopController."""
 
-    max_joint_delta: float = 0.15
-    """Maximum joint-space step per control cycle (rad). Limits jumps
-    when IK solutions change between cycles."""
-
     twist_dt: float = 0.008
     """Timestep for CartesianController twist integration."""
 
@@ -362,22 +358,18 @@ class TeleopController:
     ) -> np.ndarray | None:
         """Pick the IK solution closest to current config.
 
-        Rejects solutions that require a joint-space jump larger than
-        max_joint_delta (prevents sudden large motions).
+        In physics mode and on real hardware, the PD controller / servo
+        handles velocity limiting naturally. No clamping needed.
         """
         best = None
         best_dist = float("inf")
-        max_delta = self._config.max_joint_delta
 
         for q in solutions:
             if isinstance(q, list):
                 q = np.array(q)
             if q.size == 0:
                 continue
-            delta = np.abs(q - q_current)
-            if np.max(delta) > max_delta:
-                continue
-            dist = float(np.linalg.norm(delta))
+            dist = float(np.linalg.norm(q - q_current))
             if dist < best_dist:
                 best_dist = dist
                 best = q
