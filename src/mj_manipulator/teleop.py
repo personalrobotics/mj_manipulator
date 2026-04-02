@@ -289,18 +289,35 @@ class TeleopController:
             self._gripper_toggle_requested = True
 
     def _execute_gripper_toggle(self) -> None:
-        """Execute gripper toggle. Called from step() in the teleop thread."""
+        """Execute gripper toggle. Called from step() in the teleop thread.
+
+        Temporarily clears the pose target so the IK tracking doesn't
+        fight the physics controller during gripper actuation.
+        """
         arm_name = self._arm.config.name
         gripper = self._arm.gripper
         if gripper is None:
             return
-        # Use gripper position to decide: > 0.5 = closed, < 0.5 = open
+
+        # Pause pose tracking during gripper actuation
+        with self._lock:
+            saved_pose = self._target_pose
+            self._target_pose = None
+            self._input_mode = None
+
         pos = gripper.get_actual_position()
         if pos > 0.5:
             self._ctx.arm(arm_name).release()
         else:
             self._ctx.arm(arm_name).grasp()
         self._ctx.sync()
+
+        # Restore tracking at current EE pose (not the old target)
+        ee_pose = self._arm.get_ee_pose()
+        with self._lock:
+            self._target_pose = ee_pose
+            self._input_mode = "pose"
+            self._last_input_time = time.monotonic()
 
     # -- Recording ------------------------------------------------------------
 
