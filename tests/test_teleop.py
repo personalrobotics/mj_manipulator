@@ -196,7 +196,23 @@ class TestPoseInput:
 
 class TestIdleTimeout:
 
-    def test_idle_after_timeout(self):
+    def test_idle_after_timeout_twist(self):
+        """Twist input goes idle after timeout (pose input persists)."""
+        arm = MockArm()
+        ctx = MockContext()
+        config = TeleopConfig(idle_timeout=0.01)
+        ctrl = TeleopController(arm, ctx, config=config)
+        ctrl.activate()
+
+        ctrl.set_target_twist(np.array([0.01, 0, 0, 0, 0, 0]))
+        # Can't easily test twist path without CartesianController,
+        # so just verify the idle timeout logic
+        time.sleep(0.02)
+        state = ctrl.step()
+        assert state == TeleopState.IDLE
+
+    def test_pose_persists_after_timeout(self):
+        """Pose input keeps tracking even after idle_timeout."""
         q_solution = np.array([0.01] * 6)
         arm = MockArm(ik_solutions=[q_solution])
         ctx = MockContext()
@@ -210,7 +226,7 @@ class TestIdleTimeout:
 
         time.sleep(0.02)
         state = ctrl.step()
-        assert state == TeleopState.IDLE
+        assert state == TeleopState.TRACKING  # pose persists
 
     def test_no_idle_with_continuous_input(self):
         q_solution = np.array([0.01] * 6)

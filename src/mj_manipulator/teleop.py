@@ -204,17 +204,21 @@ class TeleopController:
             self._state = TeleopState.IDLE
             return self._state
 
-        # Read and clear input atomically
+        # Read latest input (keep it for next step — gizmo only fires on drag)
         with self._lock:
             pose = self._target_pose
             twist = self._target_twist
             mode = self._input_mode
             last_input = self._last_input_time
-            self._target_pose = None
+            # Only clear twist (continuous input — stale twist = no motion).
+            # Keep pose (gizmo position persists between drags).
             self._target_twist = None
 
-        # Idle timeout
-        if mode is None or (time.monotonic() - last_input > self._config.idle_timeout):
+        # Idle timeout — only for twist input (pose targets persist)
+        if mode == "twist" and (time.monotonic() - last_input > self._config.idle_timeout):
+            self._state = TeleopState.IDLE
+            return self._state
+        if mode is None:
             self._state = TeleopState.IDLE
             return self._state
 
