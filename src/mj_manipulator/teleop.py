@@ -226,12 +226,24 @@ class TeleopController:
             self._state = TeleopState.IDLE
             return self._state
 
+        prev_state = self._state
+
         if mode == "pose" and pose is not None:
             self._state = self._step_pose(pose)
         elif mode == "twist" and twist is not None:
             self._state = self._step_twist(twist)
         else:
             self._state = TeleopState.IDLE
+
+        # Log state transitions (not every frame)
+        if self._state != prev_state:
+            arm_name = self._arm.config.name
+            if self._state == TeleopState.TRACKING_COLLISION:
+                logger.warning("Teleop %s: collision detected", arm_name)
+            elif self._state == TeleopState.UNREACHABLE:
+                logger.warning("Teleop %s: target unreachable", arm_name)
+            elif self._state == TeleopState.TRACKING and prev_state != TeleopState.IDLE:
+                logger.info("Teleop %s: tracking resumed", arm_name)
 
         # Record frame if recording (both clean tracking and collision tracking)
         if self._recording and self._state in (
