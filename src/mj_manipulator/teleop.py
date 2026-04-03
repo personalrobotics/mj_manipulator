@@ -224,11 +224,10 @@ class TeleopController:
         if gripper_toggle:
             self._execute_gripper_toggle()
 
-        # Idle timeout — only for twist input (pose targets persist)
-        if mode == "twist" and (time.monotonic() - last_input > self._config.idle_timeout):
-            self._state = TeleopState.IDLE
-            return self._state
-        if mode is None:
+        # No input yet, or twist timed out → idle
+        if mode is None or (
+            mode == "twist" and time.monotonic() - last_input > self._config.idle_timeout
+        ):
             self._state = TeleopState.IDLE
             return self._state
 
