@@ -153,6 +153,37 @@ if np.linalg.norm(wrench[:3]) > 10.0:
     print("Contact detected!")
 ```
 
+## Teleop
+
+Interactive control from a browser (SE(3) gizmo), VR controller, or joystick. Two input paths feed the same controller:
+
+```python
+from mj_manipulator.teleop import TeleopController, SafetyMode
+
+controller = TeleopController(arm, ctx)
+controller.activate()
+
+# Pose input (browser gizmo, VR controller):
+controller.set_target_pose(target_4x4)  # IK → step_cartesian
+
+# Twist input (joystick, SpaceMouse):
+controller.set_target_twist(np.array([0.05, 0, 0, 0, 0, 0]))  # CartesianController → step_cartesian
+
+# In your control loop (~30 Hz):
+state = controller.step()  # TRACKING, TRACKING_COLLISION, UNREACHABLE, or IDLE
+
+# Safety modes
+controller.safety_mode = SafetyMode.ALLOW   # move + flag collisions (default)
+controller.safety_mode = SafetyMode.REJECT  # block colliding configs (real robot)
+
+# Recording for ML data collection
+controller.start_recording()
+# ... teleop session ...
+frames = controller.stop_recording()  # list of TeleopFrame
+```
+
+Thread-safe input methods for device callbacks. Works with SimContext (kinematic/physics) and HardwareContext (real robot).
+
 ## Architecture
 
 ```
@@ -166,6 +197,7 @@ mj_environment  →  mj_manipulator  →  geodude (UR5e + Robotiq)
                         ├── trajectory.py  Trajectory + TOPP-RA retiming
                         ├── executor.py    Kinematic/Physics executors
                         ├── cartesian.py   Cartesian (twist) control
+                        ├── teleop.py      Teleop controller (pose + twist inputs)
                         └── grasp_manager.py  Grasp state tracking
 ```
 
