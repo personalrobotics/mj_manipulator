@@ -258,9 +258,16 @@ class Arm:
         Args:
             q: Joint positions (rad), length must match DOF.
         """
-        q = np.asarray(q)
+        q = np.asarray(q, dtype=float)
         if len(q) != self.dof:
             raise ValueError(f"Expected {self.dof} joints, got {len(q)}")
+        lower, upper = self.get_joint_limits()
+        for i in range(self.dof):
+            if q[i] < lower[i] or q[i] > upper[i]:
+                raise ValueError(
+                    f"Joint {i} value {q[i]:.3f} outside limits "
+                    f"[{lower[i]:.3f}, {upper[i]:.3f}]"
+                )
         for i, idx in enumerate(self.joint_qpos_indices):
             self.env.data.qpos[idx] = q[i]
         for idx in self.joint_qvel_indices:
