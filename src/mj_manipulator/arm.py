@@ -249,14 +249,15 @@ class Arm:
             self.env.data.qpos[idx] for idx in self.joint_qpos_indices
         ])
 
-    def set_joint_positions(self, q: np.ndarray) -> None:
-        """Set joint positions directly and run forward kinematics.
+    def set_joint_positions(self, q: np.ndarray, ctx=None) -> None:
+        """Set joint positions directly, sync viewer.
 
         Simulation only — teleports the arm to the target configuration.
         On real hardware, use plan_to_configuration() instead.
 
         Args:
             q: Joint positions (rad), length must match DOF.
+            ctx: ExecutionContext for syncing. If None, runs mj_forward only.
         """
         q = np.asarray(q, dtype=float)
         if len(q) != self.dof:
@@ -273,6 +274,8 @@ class Arm:
         for idx in self.joint_qvel_indices:
             self.env.data.qvel[idx] = 0.0
         mujoco.mj_forward(self.env.model, self.env.data)
+        if ctx is not None:
+            ctx.sync()
 
     def get_joint_velocities(self) -> np.ndarray:
         """Current joint velocities (rad/s)."""
