@@ -123,11 +123,13 @@ class PhysicsController:
         initial_positions: dict[str, np.ndarray] | None = None,
         entities: dict[str, object] | None = None,
         abort_fn=None,
+        sim_lock=None,
     ):
         self.model = model
         self.data = data
         self.viewer = viewer
         self._abort_fn = abort_fn
+        self._sim_lock = sim_lock
 
         self.config = config or PhysicsExecutionConfig()
         self.gripper_config = gripper_config or GripperPhysicsConfig()
@@ -250,6 +252,20 @@ class PhysicsController:
         for state in self._entities.values():
             q_cmd = state.target_position + self.lookahead_time * state.target_velocity
             self.data.ctrl[state.actuator_ids] = q_cmd
+
+        self._step_physics()
+
+    def step_idle(self) -> None:
+        """Step physics with current targets but zero velocity feedforward.
+
+        Used for background stepping (inputhook) — maintains position hold
+        without the large lookahead that step() uses for trajectories.
+        """
+        for state in self._arms.values():
+            self.data.ctrl[state.actuator_ids] = state.target_position
+
+        for state in self._entities.values():
+            self.data.ctrl[state.actuator_ids] = state.target_position
 
         self._step_physics()
 
@@ -589,18 +605,29 @@ class PhysicsController:
     # -- Internal -----------------------------------------------------------
 
     def _step_physics(self) -> None:
-        """Apply gripper ctrl, step MuJoCo, sync viewer."""
-        for gstate in self._grippers.values():
-            self.data.ctrl[gstate.actuator_id] = gstate.target_ctrl
+        """Apply gripper ctrl, step MuJoCo, sync viewer.
 
-        for _ in range(self.steps_per_control):
-            mujoco.mj_step(self.model, self.data)
+        Acquires sim_lock if available. This allows execute() loops to
+        release the lock between control cycles so other threads (teleop,
+        chat) can interleave.
+        """
+        if self._sim_lock is not None:
+            self._sim_lock.acquire()
+        try:
+            for gstate in self._grippers.values():
+                self.data.ctrl[gstate.actuator_id] = gstate.target_ctrl
 
-        if self.viewer is not None:
-            now = time.time()
-            if now - self._last_viewer_sync >= self._viewer_sync_interval:
-                self.viewer.sync()
-                self._last_viewer_sync = now
+            for _ in range(self.steps_per_control):
+                mujoco.mj_step(self.model, self.data)
+
+            if self.viewer is not None:
+                now = time.time()
+                if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                    self.viewer.sync()
+                    self._last_viewer_sync = now
+        finally:
+            if self._sim_lock is not None:
+                self._sim_lock.release()
 
 
 # ---------------------------------------------------------------------------

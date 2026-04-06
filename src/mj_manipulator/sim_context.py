@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -223,6 +224,10 @@ class SimContext:
         self._abort_fn = abort_fn
         self._viewer_fps = viewer_fps
 
+        self.sim_lock = threading.RLock()
+        self.idle = threading.Event()
+        self.idle.set()  # starts idle — no active controller
+
         self._controller: PhysicsController | None = None
         self._executors: dict[str, object] = {}
         self._arm_controllers: dict[str, SimArmController] = {}
@@ -316,22 +321,23 @@ class SimContext:
             targets: Dict mapping arm names to target joint positions.
                 None means hold all arms at current positions.
         """
-        if self._controller is not None:
-            # Physics mode: delegate to controller
-            if targets:
-                for name, q in targets.items():
-                    self._controller.set_arm_target(name, q)
-            self._controller.step()
-        else:
-            # Kinematic mode: set qpos directly
-            if targets:
-                for name, q in targets.items():
-                    executor = self._executors.get(name)
-                    if executor is not None:
-                        executor.set_position(np.asarray(q))
+        with self.sim_lock:
+            if self._controller is not None:
+                # Physics mode: delegate to controller
+                if targets:
+                    for name, q in targets.items():
+                        self._controller.set_arm_target(name, q)
+                self._controller.step()
+            else:
+                # Kinematic mode: set qpos directly
+                if targets:
+                    for name, q in targets.items():
+                        executor = self._executors.get(name)
+                        if executor is not None:
+                            executor.set_position(np.asarray(q))
 
-            mujoco.mj_forward(self._model, self._data)
-            self._throttled_viewer_sync()
+                mujoco.mj_forward(self._model, self._data)
+                self._throttled_viewer_sync()
 
     def step_cartesian(
         self,
@@ -351,19 +357,36 @@ class SimContext:
         """
         position = np.asarray(position)
 
-        if self._controller is not None:
-            self._controller.step_reactive(arm_name, position, velocity)
-        else:
-            executor = self._executors.get(arm_name)
-            if executor is not None:
-                executor.set_position(position)
-                executor.step()
+        with self.sim_lock:
+            if self._controller is not None:
+                self._controller.step_reactive(arm_name, position, velocity)
+            else:
+                executor = self._executors.get(arm_name)
+                if executor is not None:
+                    executor.set_position(position)
+                    executor.step()
 
     def sync(self) -> None:
         """Synchronize state with simulation (mj_forward + viewer sync)."""
-        mujoco.mj_forward(self._model, self._data)
-        if self._viewer is not None:
-            self._viewer.sync()
+        with self.sim_lock:
+            mujoco.mj_forward(self._model, self._data)
+            if self._viewer is not None:
+                self._viewer.sync()
+
+    def step_idle(self) -> None:
+        """Advance one physics cycle without changing control targets.
+
+        Used by background stepping (e.g. IPython inputhook) to keep physics
+        alive without interfering with active controllers. Steps physics with
+        zero velocity feedforward so arms hold their last-commanded position
+        without overshoot.
+        """
+        with self.sim_lock:
+            if self._controller is not None:
+                self._controller.step_idle()
+            else:
+                mujoco.mj_forward(self._model, self._data)
+                self._throttled_viewer_sync()
 
     def hold(self) -> None:
         """Update all controller targets to match current joint positions.
@@ -450,6 +473,7 @@ class SimContext:
             initial_positions=self._initial_positions,
             entities=self._entities,
             abort_fn=self._abort_fn,
+            sim_lock=self.sim_lock,
         )
 
         for name in self._arms:
@@ -459,8 +483,9 @@ class SimContext:
             self._executors[name] = self._controller.get_entity_executor(name)
 
         # Settle physics so sensors (F/T, contacts) are immediately valid
-        for _ in range(500):
-            mujoco.mj_step(self._model, self._data)
+        with self.sim_lock:
+            for _ in range(500):
+                mujoco.mj_step(self._model, self._data)
 
     def _setup_kinematic(self, viewer_sync_interval: float) -> None:
         """Create per-arm and per-entity KinematicExecutors."""
