@@ -59,6 +59,7 @@ class PhysicsEventLoop:
         self._queue: queue.SimpleQueue[_Command] = queue.SimpleQueue()
         self._owner_thread: int = threading.get_ident()
         self._teleop_entries: list[tuple[Any, Any]] = []  # (controller, panel)
+        self._teleop_lock = threading.Lock()  # protects _teleop_entries
         self._idle_step_fn: Callable[[], None] | None = None
         self._viewer_sync_fn: Callable[[], None] | None = None
 
@@ -84,12 +85,20 @@ class PhysicsEventLoop:
     # -- Teleop registration (called from viser callbacks) -------------------
 
     def register_teleop(self, controller: Any, panel: Any = None) -> None:
-        """Register a teleop controller to be stepped each tick."""
-        self._teleop_entries.append((controller, panel))
+        """Register a teleop controller to be stepped each tick.
+
+        Thread-safe — may be called from viser callbacks.
+        """
+        with self._teleop_lock:
+            self._teleop_entries.append((controller, panel))
 
     def unregister_teleop(self, controller: Any) -> None:
-        """Remove a teleop controller from the tick loop."""
-        self._teleop_entries = [(c, p) for c, p in self._teleop_entries if c is not controller]
+        """Remove a teleop controller from the tick loop.
+
+        Thread-safe — may be called from viser callbacks.
+        """
+        with self._teleop_lock:
+            self._teleop_entries = [(c, p) for c, p in self._teleop_entries if c is not controller]
 
     # -- Main loop (owner thread only) ---------------------------------------
 
@@ -120,7 +129,9 @@ class PhysicsEventLoop:
             return
 
         # 2. Step active teleop controllers
-        for controller, panel in self._teleop_entries:
+        with self._teleop_lock:
+            entries = list(self._teleop_entries)
+        for controller, panel in entries:
             if controller.is_active:
                 try:
                     state = controller.step()
