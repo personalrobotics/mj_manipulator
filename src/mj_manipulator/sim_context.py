@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -223,6 +224,11 @@ class SimContext:
         self._abort_fn = abort_fn
         self._viewer_fps = viewer_fps
 
+        # Set when no trajectory is executing. Threads can wait on this
+        # before starting operations that would conflict with execute().
+        self.idle = threading.Event()
+        self.idle.set()
+
         self._controller: PhysicsController | None = None
         self._executors: dict[str, object] = {}
         self._arm_controllers: dict[str, SimArmController] = {}
@@ -294,17 +300,21 @@ class SimContext:
         from mj_manipulator.planning import PlanResult
         from mj_manipulator.trajectory import Trajectory
 
-        if isinstance(item, PlanResult):
-            for traj in item.trajectories:
-                if self._abort_fn is not None and self._abort_fn():
-                    return False
-                if not self._execute_trajectory(traj):
-                    return False
-            return True
-        elif isinstance(item, Trajectory):
-            return self._execute_trajectory(item)
-        else:
-            raise TypeError(f"Cannot execute {type(item)}")
+        self.idle.clear()
+        try:
+            if isinstance(item, PlanResult):
+                for traj in item.trajectories:
+                    if self._abort_fn is not None and self._abort_fn():
+                        return False
+                    if not self._execute_trajectory(traj):
+                        return False
+                return True
+            elif isinstance(item, Trajectory):
+                return self._execute_trajectory(item)
+            else:
+                raise TypeError(f"Cannot execute {type(item)}")
+        finally:
+            self.idle.set()
 
     def step(self, targets: dict[str, np.ndarray] | None = None) -> None:
         """Advance one control cycle with optional joint targets.
