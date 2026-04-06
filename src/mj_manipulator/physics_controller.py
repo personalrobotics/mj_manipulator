@@ -240,20 +240,25 @@ class PhysicsController:
     def step(self) -> None:
         """Apply control to all actuators and step physics.
 
+        Acquires sim_lock to make ctrl writes + mj_step atomic.
         Uses full ``lookahead_time`` for velocity feedforward. For reactive
         streaming control, use :meth:`step_reactive` instead.
         """
-        # Arm actuators: position + velocity feedforward
-        for state in self._arms.values():
-            q_cmd = state.target_position + self.lookahead_time * state.target_velocity
-            self.data.ctrl[state.actuator_ids] = q_cmd
+        if self._sim_lock is not None:
+            self._sim_lock.acquire()
+        try:
+            for state in self._arms.values():
+                q_cmd = state.target_position + self.lookahead_time * state.target_velocity
+                self.data.ctrl[state.actuator_ids] = q_cmd
 
-        # Entity actuators (bases, etc.): same feedforward
-        for state in self._entities.values():
-            q_cmd = state.target_position + self.lookahead_time * state.target_velocity
-            self.data.ctrl[state.actuator_ids] = q_cmd
+            for state in self._entities.values():
+                q_cmd = state.target_position + self.lookahead_time * state.target_velocity
+                self.data.ctrl[state.actuator_ids] = q_cmd
 
-        self._step_physics()
+            self._step_physics()
+        finally:
+            if self._sim_lock is not None:
+                self._sim_lock.release()
 
     def step_idle(self) -> None:
         """Step physics holding all arms at their current targets.
@@ -261,13 +266,19 @@ class PhysicsController:
         Uses target_position with zero velocity feedforward. This holds
         arms against gravity (unlike reading qpos which would drift down).
         """
-        for state in self._arms.values():
-            self.data.ctrl[state.actuator_ids] = state.target_position
+        if self._sim_lock is not None:
+            self._sim_lock.acquire()
+        try:
+            for state in self._arms.values():
+                self.data.ctrl[state.actuator_ids] = state.target_position
 
-        for state in self._entities.values():
-            self.data.ctrl[state.actuator_ids] = state.target_position
+            for state in self._entities.values():
+                self.data.ctrl[state.actuator_ids] = state.target_position
 
-        self._step_physics()
+            self._step_physics()
+        finally:
+            if self._sim_lock is not None:
+                self._sim_lock.release()
 
     def step_reactive(
         self,
@@ -298,14 +309,21 @@ class PhysicsController:
         # Reactive arm: small lookahead
         reactive_lookahead = 2.0 * self.control_dt
         q_cmd = state.target_position + reactive_lookahead * state.target_velocity
-        self.data.ctrl[state.actuator_ids] = q_cmd
 
-        # Other arms: hold position (no velocity feedforward)
-        for other_name, other_state in self._arms.items():
-            if other_name != arm_name:
-                self.data.ctrl[other_state.actuator_ids] = other_state.target_position
+        if self._sim_lock is not None:
+            self._sim_lock.acquire()
+        try:
+            self.data.ctrl[state.actuator_ids] = q_cmd
 
-        self._step_physics()
+            # Other arms: hold position (no velocity feedforward)
+            for other_name, other_state in self._arms.items():
+                if other_name != arm_name:
+                    self.data.ctrl[other_state.actuator_ids] = other_state.target_position
+
+            self._step_physics()
+        finally:
+            if self._sim_lock is not None:
+                self._sim_lock.release()
 
     # -- Trajectory execution -----------------------------------------------
 
@@ -332,13 +350,14 @@ class PhysicsController:
                 f"Trajectory DOF {trajectory.dof} doesn't match arm joint count {len(state.joint_qpos_indices)}"
             )
 
-        # Follow trajectory at real-time rate
+        # Follow trajectory at real-time rate.
+        # Lock is acquired per cycle (not for the whole trajectory) so
+        # teleop/inputhook can interleave on other arms.
         realtime = self.viewer is not None
         t_start = time.time() if realtime else 0.0
         for i in range(trajectory.num_waypoints):
             if self._abort_fn is not None and self._abort_fn():
                 logger.info("Trajectory aborted at waypoint %d/%d", i, trajectory.num_waypoints)
-                # Zero velocity so arm holds position while other arms move
                 state.target_velocity = np.zeros(len(state.actuator_ids))
                 return False
             state.target_position = trajectory.positions[i]
@@ -607,27 +626,19 @@ class PhysicsController:
     def _step_physics(self) -> None:
         """Apply gripper ctrl, step MuJoCo, sync viewer.
 
-        Acquires sim_lock if available. This allows execute() loops to
-        release the lock between control cycles so other threads (teleop,
-        chat) can interleave.
+        Caller must already hold sim_lock (or call from a locked context).
         """
-        if self._sim_lock is not None:
-            self._sim_lock.acquire()
-        try:
-            for gstate in self._grippers.values():
-                self.data.ctrl[gstate.actuator_id] = gstate.target_ctrl
+        for gstate in self._grippers.values():
+            self.data.ctrl[gstate.actuator_id] = gstate.target_ctrl
 
-            for _ in range(self.steps_per_control):
-                mujoco.mj_step(self.model, self.data)
+        for _ in range(self.steps_per_control):
+            mujoco.mj_step(self.model, self.data)
 
-            if self.viewer is not None:
-                now = time.time()
-                if now - self._last_viewer_sync >= self._viewer_sync_interval:
-                    self.viewer.sync()
-                    self._last_viewer_sync = now
-        finally:
-            if self._sim_lock is not None:
-                self._sim_lock.release()
+        if self.viewer is not None:
+            now = time.time()
+            if now - self._last_viewer_sync >= self._viewer_sync_interval:
+                self.viewer.sync()
+                self._last_viewer_sync = now
 
 
 # ---------------------------------------------------------------------------
