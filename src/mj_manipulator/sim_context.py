@@ -372,10 +372,14 @@ class SimContext:
                 future = self._controller.start_trajectory(entity, traj, abort_fn)
                 control_dt = self._controller.control_dt
                 realtime = self._controller.viewer is not None
+                t_next = time.monotonic() + control_dt
                 while not future.done():
                     self._event_loop.tick()
                     if realtime:
-                        time.sleep(control_dt)
+                        now = time.monotonic()
+                        if t_next > now:
+                            time.sleep(t_next - now)
+                        t_next = now + control_dt
                 if not future.result():
                     return False
             else:
