@@ -297,6 +297,7 @@ class SimContext:
             True if execution completed successfully.
         """
         if self._event_loop is not None:
+            self._event_loop._deactivate_all_teleop()
             return self._event_loop.run_on_physics_thread(lambda: self._execute_impl(item))
         return self._execute_impl(item)
 
