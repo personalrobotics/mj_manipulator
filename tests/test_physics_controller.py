@@ -14,6 +14,7 @@ from mj_manipulator.config import PhysicsExecutionConfig
 from mj_manipulator.physics_controller import (
     ArmPhysicsExecutor,
     PhysicsController,
+    TrajectoryRunner,
 )
 from mj_manipulator.trajectory import Trajectory
 
@@ -210,3 +211,126 @@ class TestPhysicsControllerMultiArm:
         # Both arms should have actuator commands set
         assert ctrl._arms["arm1"].target_position[0] == 0.5
         assert ctrl._arms["arm2"].target_position[0] == 0.0
+
+
+class TestTrajectoryRunner:
+    """Tests for non-blocking TrajectoryRunner."""
+
+    @pytest.fixture
+    def lenient_controller(self, model_and_data, mock_arm):
+        model, data = model_and_data
+        return PhysicsController(
+            model,
+            data,
+            {"test_arm": mock_arm},
+            config=PhysicsExecutionConfig(
+                control_dt=0.002,
+                position_tolerance=0.3,
+                velocity_tolerance=1.0,
+                convergence_timeout_steps=2000,
+            ),
+        )
+
+    def test_advance_writes_targets(self, controller):
+        positions = np.array([[0.0, 0.0], [0.1, 0.1], [0.2, 0.2]])
+        traj = make_trajectory(positions, entity="test_arm")
+        future = controller.start_trajectory("test_arm", traj)
+
+        assert controller.has_active_runner("test_arm")
+        assert not future.done()
+
+        # Advance first waypoint
+        controller.advance_all()
+        state = controller._arms["test_arm"]
+        np.testing.assert_allclose(state.target_position, [0.0, 0.0])
+
+        # Advance second
+        controller.advance_all()
+        np.testing.assert_allclose(state.target_position, [0.1, 0.1])
+
+    def test_runner_completes(self, lenient_controller):
+        positions = np.array([[0.0, 0.0], [0.1, 0.1]])
+        traj = make_trajectory(positions, entity="test_arm")
+        future = lenient_controller.start_trajectory("test_arm", traj)
+
+        # Advance through all waypoints
+        lenient_controller.advance_all()  # waypoint 0
+        lenient_controller.advance_all()  # waypoint 1 → enters convergence
+
+        # Step physics to let arm converge (convergence checks need mj_step)
+        for _ in range(600):
+            lenient_controller.advance_all()
+            lenient_controller.step()
+
+        assert future.done()
+        assert not lenient_controller.has_active_runner("test_arm")
+
+    def test_runner_abort(self, controller):
+        positions = np.array([[0.0, 0.0], [0.1, 0.1], [0.2, 0.2]])
+        traj = make_trajectory(positions, entity="test_arm")
+        aborted = False
+
+        def abort_fn():
+            return aborted
+
+        future = controller.start_trajectory("test_arm", traj, abort_fn=abort_fn)
+
+        controller.advance_all()  # waypoint 0 — not aborted
+        assert not future.done()
+
+        aborted = True
+        controller.advance_all()  # detects abort
+
+        assert future.done()
+        assert future.result() is False
+        assert not controller.has_active_runner("test_arm")
+
+    def test_start_trajectory_validates(self, controller):
+        # Unknown arm
+        positions = np.array([[0.0, 0.0]])
+        traj = make_trajectory(positions)
+        with pytest.raises(ValueError, match="Unknown arm"):
+            controller.start_trajectory("nonexistent", traj)
+
+        # DOF mismatch
+        bad_traj = Trajectory(
+            timestamps=np.array([0.0]),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            velocities=np.zeros((1, 3)),
+            accelerations=np.zeros((1, 3)),
+            joint_names=["j1", "j2", "j3"],
+        )
+        with pytest.raises(ValueError, match="DOF"):
+            controller.start_trajectory("test_arm", bad_traj)
+
+    def test_advance_all_no_runners_is_noop(self, controller):
+        assert not controller.has_active_runner()
+        controller.advance_all()  # should not raise
+
+    def test_per_arm_lookahead(self, controller, model_and_data):
+        """Per-arm lookahead is used in step()."""
+        _, data = model_and_data
+        state = controller._arms["test_arm"]
+
+        # Set a custom lookahead
+        state.lookahead = 0.05
+        state.target_position = np.array([1.0, 1.0])
+        state.target_velocity = np.array([2.0, 2.0])
+        controller.step()
+
+        # ctrl should be pos + 0.05 * vel = 1.0 + 0.1 = 1.1
+        expected = 1.0 + 0.05 * 2.0
+        np.testing.assert_allclose(
+            [data.ctrl[aid] for aid in state.actuator_ids],
+            [expected, expected],
+        )
+
+        # Reset to default (None) — should use controller.lookahead_time
+        state.lookahead = None
+        controller.step()
+        default_la = controller.lookahead_time
+        expected_default = 1.0 + default_la * 2.0
+        np.testing.assert_allclose(
+            [data.ctrl[aid] for aid in state.actuator_ids],
+            [expected_default, expected_default],
+        )

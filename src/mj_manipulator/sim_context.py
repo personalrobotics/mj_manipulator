@@ -26,7 +26,9 @@ Usage::
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from concurrent.futures import Future
 from typing import TYPE_CHECKING
 
 import mujoco
@@ -35,6 +37,8 @@ import numpy as np
 if TYPE_CHECKING:
     from mj_manipulator.arm import Arm
     from mj_manipulator.config import PhysicsConfig
+    from mj_manipulator.event_loop import PhysicsEventLoop
+    from mj_manipulator.ownership import OwnershipRegistry
     from mj_manipulator.physics_controller import PhysicsController
 
 logger = logging.getLogger(__name__)
@@ -210,7 +214,7 @@ class SimContext:
         viewer_fps: float = 30.0,
         entities: dict[str, object] | None = None,
         abort_fn: object | None = None,
-        event_loop: object | None = None,
+        event_loop: PhysicsEventLoop | None = None,
     ):
         self._model = model
         self._data = data
@@ -231,6 +235,12 @@ class SimContext:
         self._owns_viewer = False
         self._last_viewer_sync = 0.0
         self._viewer_sync_interval = 0.0  # set in __enter__
+        self._ownership: OwnershipRegistry | None = None
+
+    @property
+    def ownership(self) -> OwnershipRegistry | None:
+        """Arm ownership registry, available when event loop is set."""
+        return self._ownership
 
     def __enter__(self) -> SimContext:
         """Enter context: create viewer and set up executors."""
@@ -266,17 +276,30 @@ class SimContext:
         for arm in self._arms.values():
             arm.ft_valid = self._physics
 
+        # Wire event loop to controller for tick-driven mode
+        if self._event_loop is not None and self._controller is not None:
+            self._event_loop.set_controller(self._controller)
+
+            # Create ownership registry for all arms + entities
+            from mj_manipulator.ownership import OwnershipRegistry
+
+            all_names = list(self._arms.keys()) + list(self._entities.keys())
+            self._ownership = OwnershipRegistry(all_names)
+
         self.sync()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context: clean up viewer and executors."""
+        if self._event_loop is not None:
+            self._event_loop.set_controller(None)
         if self._owns_viewer and self._viewer is not None:
             self._viewer.close()
             self._viewer = None
         self._controller = None
         self._executors.clear()
         self._arm_controllers.clear()
+        self._ownership = None
         return False
 
     # -- ExecutionContext protocol -------------------------------------------
@@ -284,11 +307,13 @@ class SimContext:
     def execute(self, item: object) -> bool:
         """Execute a trajectory or plan result.
 
-        Routes each trajectory to the appropriate executor based on its
-        ``entity`` field. For PlanResult, executes trajectories in order.
+        In tick-driven mode (event loop + controller), trajectories run
+        as non-blocking runners: the caller blocks on a Future while
+        tick() advances the runner each cycle. Physics keeps stepping
+        and teleop on other arms continues working.
 
-        If an event loop is set and this is called from a non-owner thread
-        (e.g. chat), the work is dispatched to the physics thread via Future.
+        In legacy mode (no event loop, or kinematic), execution is
+        synchronous and blocking.
 
         Args:
             item: Trajectory or PlanResult to execute.
@@ -296,13 +321,69 @@ class SimContext:
         Returns:
             True if execution completed successfully.
         """
+        if self._event_loop is not None and self._controller is not None:
+            return self._execute_tick_driven(item)
+
         if self._event_loop is not None:
+            # Kinematic with event loop: legacy blocking dispatch
             self._event_loop._deactivate_all_teleop()
             return self._event_loop.run_on_physics_thread(lambda: self._execute_impl(item))
+
         return self._execute_impl(item)
 
+    def _execute_tick_driven(self, item: object) -> bool:
+        """Execute via non-blocking trajectory runners.
+
+        Starts runners on the physics thread, then blocks the caller on
+        Futures. The physics thread keeps ticking — advancing runners,
+        stepping teleop, stepping physics — while the caller waits.
+        """
+        from mj_manipulator.planning import PlanResult
+        from mj_manipulator.trajectory import Trajectory
+
+        if isinstance(item, PlanResult):
+            trajectories = item.trajectories
+        elif isinstance(item, Trajectory):
+            trajectories = [item]
+        else:
+            raise TypeError(f"Cannot execute {type(item)}")
+
+        for traj in trajectories:
+            entity = traj.entity
+            if entity is None:
+                raise ValueError("Trajectory has no entity set")
+
+            # Build per-arm abort function
+            abort_fn = None
+            if self._ownership is not None:
+                abort_fn = lambda e=entity: self._ownership.is_aborted(e)
+            elif self._abort_fn is not None:
+                abort_fn = self._abort_fn
+
+            # Start the runner on the physics thread (fast, non-blocking)
+            runner_future: Future[bool] = Future()
+
+            def _start(t=traj, af=abort_fn, rf=runner_future):
+                try:
+                    f = self._controller.start_trajectory(t.entity, t, af)
+                    f.add_done_callback(lambda done_f: rf.set_result(done_f.result()))
+                except Exception as e:
+                    rf.set_exception(e)
+
+            if threading.get_ident() == self._event_loop._owner_thread:
+                _start()
+            else:
+                self._event_loop.submit(_start)
+
+            # Block caller until this trajectory completes
+            result = runner_future.result()
+            if not result:
+                return False
+
+        return True
+
     def _execute_impl(self, item: object) -> bool:
-        """Execute implementation — always runs on the physics thread."""
+        """Execute implementation — synchronous, always runs on the physics thread."""
         from mj_manipulator.planning import PlanResult
         from mj_manipulator.trajectory import Trajectory
 
@@ -356,8 +437,9 @@ class SimContext:
     ) -> None:
         """Advance one control cycle with a cartesian-space joint target.
 
-        In physics mode, uses reactive lookahead (2 × control_dt) for smooth
-        PD tracking. In kinematic mode, sets position directly.
+        In tick-driven mode (event loop + controller), sets targets only —
+        tick() handles the physics step. In other modes, steps physics
+        immediately.
 
         Args:
             arm_name: Which arm to control.
@@ -366,10 +448,25 @@ class SimContext:
         """
         position = np.asarray(position)
 
-        if self._event_loop is not None:
+        if self._event_loop is not None and self._controller is not None:
+            # Tick-driven: set targets only, tick() will step physics
+            self._event_loop.run_on_physics_thread(
+                lambda: self._set_reactive_target(arm_name, position, velocity)
+            )
+        elif self._event_loop is not None:
             self._event_loop.run_on_physics_thread(lambda: self._step_cartesian_impl(arm_name, position, velocity))
         else:
             self._step_cartesian_impl(arm_name, position, velocity)
+
+    def _set_reactive_target(self, arm_name: str, position: np.ndarray, velocity: np.ndarray | None) -> None:
+        """Set arm target with reactive lookahead. Does NOT step physics."""
+        state = self._controller._arms[arm_name]
+        state.target_position = np.asarray(position).copy()
+        state.target_velocity = (
+            np.asarray(velocity).copy() if velocity is not None
+            else np.zeros(len(state.actuator_ids))
+        )
+        state.lookahead = 2.0 * self._controller.control_dt
 
     def _step_cartesian_impl(self, arm_name: str, position: np.ndarray, velocity: np.ndarray | None) -> None:
         if self._controller is not None:
@@ -379,6 +476,24 @@ class SimContext:
             if executor is not None:
                 executor.set_position(position)
                 executor.step()
+
+    def set_arm_target(
+        self,
+        arm_name: str,
+        position: np.ndarray,
+        velocity: np.ndarray | None = None,
+    ) -> None:
+        """Set arm target without stepping physics.
+
+        For use in tick-driven mode where the event loop owns the step.
+
+        Args:
+            arm_name: Which arm to set targets for.
+            position: Target joint positions.
+            velocity: Target joint velocities for feedforward.
+        """
+        if self._controller is not None:
+            self._controller.set_arm_target(arm_name, position, velocity)
 
     def sync(self) -> None:
         """Synchronize state with simulation (mj_forward + viewer sync)."""
