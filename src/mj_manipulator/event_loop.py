@@ -100,6 +100,22 @@ class PhysicsEventLoop:
         with self._teleop_lock:
             self._teleop_entries = [(c, p) for c, p in self._teleop_entries if c is not controller]
 
+    def _deactivate_all_teleop(self) -> None:
+        """Deactivate all teleop controllers and reset their panels."""
+        with self._teleop_lock:
+            entries = list(self._teleop_entries)
+            self._teleop_entries.clear()
+        for controller, panel in entries:
+            try:
+                controller.deactivate()
+            except Exception:
+                pass
+            if panel is not None:
+                try:
+                    panel._on_teleop_error()  # resets gizmo/button/status
+                except Exception:
+                    pass
+
     # -- Main loop (owner thread only) ---------------------------------------
 
     def tick(self) -> None:
@@ -118,6 +134,9 @@ class PhysicsEventLoop:
         except queue.Empty:
             pass
         else:
+            # Deactivate all teleop controllers before running a command —
+            # the command (trajectory, grasp, etc.) needs exclusive control.
+            self._deactivate_all_teleop()
             try:
                 result = cmd.fn()
                 cmd.future.set_result(result)
