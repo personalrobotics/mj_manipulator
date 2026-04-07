@@ -65,6 +65,7 @@ class PhysicsEventLoop:
         self._executing_entity: str | None = None  # arm currently in execute()
         self._last_yield_time: float = 0.0
         self._yield_interval: float = 1.0 / 30.0  # 30 Hz teleop update rate
+        self.has_teleop: bool = False  # fast check for yield_fn
 
     # -- Public API (any thread) ---------------------------------------------
 
@@ -92,9 +93,14 @@ class PhysicsEventLoop:
         throttled to 30Hz — teleop IK + collision checks are expensive
         and don't need to run faster than the gizmo update rate.
 
+        When no teleop is registered, returns immediately (one bool check).
+
         Does NOT drain the command queue — queued commands (like teleop
         activation on the same arm) must wait until execute() finishes.
         """
+        if not self.has_teleop:
+            return
+
         import time as _time
 
         now = _time.monotonic()
@@ -104,8 +110,6 @@ class PhysicsEventLoop:
 
         with self._teleop_lock:
             entries = list(self._teleop_entries)
-        if not entries:
-            return
         for controller, panel in entries:
             if controller.is_active:
                 try:
@@ -127,6 +131,7 @@ class PhysicsEventLoop:
         """
         with self._teleop_lock:
             self._teleop_entries.append((controller, panel))
+            self.has_teleop = True
 
     def unregister_teleop(self, controller: Any) -> None:
         """Remove a teleop controller from the tick loop.
@@ -135,6 +140,7 @@ class PhysicsEventLoop:
         """
         with self._teleop_lock:
             self._teleop_entries = [(c, p) for c, p in self._teleop_entries if c is not controller]
+            self.has_teleop = bool(self._teleop_entries)
 
     def is_executing(self, entity: str | None = None) -> bool:
         """Check if an entity is currently executing a trajectory.
@@ -164,6 +170,7 @@ class PhysicsEventLoop:
                 self._teleop_entries = [
                     (c, p) for c, p in self._teleop_entries if c._arm.config.name != entity
                 ]
+            self.has_teleop = bool(self._teleop_entries)
         for controller, panel in to_deactivate:
             try:
                 controller.deactivate()
