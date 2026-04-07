@@ -198,7 +198,7 @@ class TrajectoryRunner:
         if self._convergence_steps >= cfg.convergence_timeout_steps:
             logger.warning(
                 "Convergence timeout for %s: max_pos_err=%.2f° (limit %.2f°)",
-                self._arm_name,
+                self._entity_name,
                 np.rad2deg(float(np.max(pos_error))),
                 np.rad2deg(cfg.position_tolerance),
             )
