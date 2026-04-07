@@ -63,6 +63,8 @@ class PhysicsEventLoop:
         self._idle_step_fn: Callable[[], None] | None = None
         self._viewer_sync_fn: Callable[[], None] | None = None
         self._executing_entity: str | None = None  # arm currently in execute()
+        self._last_yield_time: float = 0.0
+        self._yield_interval: float = 1.0 / 30.0  # 30 Hz teleop update rate
 
     # -- Public API (any thread) ---------------------------------------------
 
@@ -86,16 +88,24 @@ class PhysicsEventLoop:
     def yield_to_others(self) -> None:
         """Update other arms' teleop targets during a trajectory.
 
-        Called by execute() between control cycles. Only updates teleop
-        targets (step_physics=False) — the trajectory's own step() applies
-        all arms in one mj_step.
+        Called by execute() every control cycle (125Hz), but internally
+        throttled to 30Hz — teleop IK + collision checks are expensive
+        and don't need to run faster than the gizmo update rate.
 
         Does NOT drain the command queue — queued commands (like teleop
-        activation on the same arm) must wait until execute() finishes
-        to avoid conflicting control on the same arm.
+        activation on the same arm) must wait until execute() finishes.
         """
+        import time as _time
+
+        now = _time.monotonic()
+        if now - self._last_yield_time < self._yield_interval:
+            return
+        self._last_yield_time = now
+
         with self._teleop_lock:
             entries = list(self._teleop_entries)
+        if not entries:
+            return
         for controller, panel in entries:
             if controller.is_active:
                 try:
