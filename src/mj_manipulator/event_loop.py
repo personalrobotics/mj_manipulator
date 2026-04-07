@@ -195,14 +195,8 @@ class PhysicsEventLoop:
                         panel._on_teleop_error()
 
         # 4. Single physics step for ALL arms
+        # (PhysicsController.step → _step_physics handles throttled viewer sync)
         self._controller.step()
-
-        # 5. Viewer sync
-        if self._viewer_sync_fn is not None:
-            try:
-                self._viewer_sync_fn()
-            except Exception:
-                pass
 
     def _tick_legacy(self) -> None:
         """Legacy mode: backwards compatible with blocking execute()."""
