@@ -365,6 +365,12 @@ class SimContext:
             if self._ownership is not None:
                 from mj_manipulator.ownership import OwnerKind
 
+                kind, _ = self._ownership.owner_of(entity)
+                if kind == OwnerKind.TELEOP:
+                    # Deactivate teleop on this arm so trajectory can run.
+                    # This is the per-arm equivalent of the old
+                    # _deactivate_all_teleop() call in execute().
+                    self._deactivate_teleop_for(entity)
                 self._ownership.acquire(entity, OwnerKind.TRAJECTORY, traj)
                 abort_fn = lambda e=entity: self._ownership.is_aborted(e)
             elif self._abort_fn is not None:
@@ -596,6 +602,43 @@ class SimContext:
             if now - self._last_viewer_sync >= self._viewer_sync_interval:
                 self._viewer.sync()
                 self._last_viewer_sync = now
+
+    # -- Internal helpers ----------------------------------------------------
+
+    def _deactivate_teleop_for(self, entity: str) -> None:
+        """Deactivate any teleop controller owning this arm.
+
+        Finds the teleop controller registered for this entity in the event
+        loop, deactivates it, unregisters it, and releases ownership.
+        """
+        if self._event_loop is None or self._ownership is None:
+            return
+
+        from mj_manipulator.ownership import OwnerKind
+
+        kind, owner = self._ownership.owner_of(entity)
+        if kind != OwnerKind.TELEOP:
+            return
+
+        # Find and remove the matching teleop entry
+        with self._event_loop._teleop_lock:
+            remaining = []
+            for controller, panel in self._event_loop._teleop_entries:
+                if controller is owner:
+                    try:
+                        controller.deactivate()
+                    except Exception:
+                        pass
+                    if panel is not None:
+                        try:
+                            panel._on_teleop_error()
+                        except Exception:
+                            pass
+                else:
+                    remaining.append((controller, panel))
+            self._event_loop._teleop_entries = remaining
+
+        self._ownership.release(entity, owner)
 
     # -- Internal setup -----------------------------------------------------
 
