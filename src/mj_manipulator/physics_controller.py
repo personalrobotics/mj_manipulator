@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import mujoco
 import numpy as np
@@ -48,6 +49,7 @@ class _ArmState:
     joint_qvel_indices: np.ndarray
     target_position: np.ndarray
     target_velocity: np.ndarray
+    lookahead: float | None = None  # None = use controller default
 
 
 @dataclass
@@ -70,6 +72,142 @@ class _GripperState:
     ctrl_open: float
     ctrl_closed: float
     target_ctrl: float
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryRunner
+# ---------------------------------------------------------------------------
+
+
+class TrajectoryRunner:
+    """Non-blocking trajectory target provider.
+
+    Advances one waypoint per call to :meth:`advance`, writing targets to
+    the arm's ``_ArmState``. Does NOT call ``mj_step`` — the event loop
+    owns physics stepping.
+
+    This is the "update method" pattern from game programming: the game
+    loop calls ``runner.advance()`` each frame, then steps physics once
+    with all arms' targets applied.
+
+    Created via :meth:`PhysicsController.start_trajectory`.
+    """
+
+    def __init__(
+        self,
+        controller: PhysicsController,
+        entity_name: str,
+        trajectory: Trajectory,
+        abort_fn: Callable[[], bool] | None = None,
+    ):
+        self._controller = controller
+        self._entity_name = entity_name
+        self._trajectory = trajectory
+        self._abort_fn = abort_fn
+        self._waypoint_index = 0
+        self._done = False
+        self._converging = False
+        self._convergence_steps = 0
+        self._future: Future[bool] = Future()
+        self._realtime = controller.viewer is not None
+        self._t_start = time.time() if self._realtime else 0.0
+
+        # Resolve state from arms or entities
+        if entity_name in controller._arms:
+            self._state = controller._arms[entity_name]
+            self._is_arm = True
+        elif entity_name in controller._entities:
+            self._state = controller._entities[entity_name]
+            self._is_arm = False
+        else:
+            raise ValueError(f"Unknown arm or entity: {entity_name}")
+
+    @property
+    def entity_name(self) -> str:
+        """Which arm or entity this runner controls."""
+        return self._entity_name
+
+    @property
+    def done(self) -> bool:
+        """Whether the trajectory has completed (success or abort)."""
+        return self._done
+
+    @property
+    def future(self) -> Future[bool]:
+        """Future that resolves when the trajectory completes."""
+        return self._future
+
+    def advance(self) -> None:
+        """Write next waypoint target to arm state.
+
+        Call once per tick. After the last waypoint, enters convergence
+        mode (checking position/velocity error each tick).
+        """
+        if self._done:
+            return
+
+        if self._abort_fn is not None and self._abort_fn():
+            self._state.target_velocity = np.zeros(len(self._state.actuator_ids))
+            self._finish(False)
+            logger.info(
+                "Trajectory aborted at waypoint %d/%d",
+                self._waypoint_index,
+                self._trajectory.num_waypoints,
+            )
+            return
+
+        if self._converging:
+            self._advance_convergence()
+            return
+
+        state = self._state
+        traj = self._trajectory
+
+        state.target_position = traj.positions[self._waypoint_index]
+        state.target_velocity = traj.velocities[self._waypoint_index]
+
+        self._waypoint_index += 1
+
+        if self._waypoint_index >= traj.num_waypoints:
+            state.target_position = traj.positions[-1].copy()
+            state.target_velocity = np.zeros(len(state.actuator_ids))
+            if self._is_arm:
+                # Arms need convergence settling (PD dynamics)
+                self._converging = True
+            else:
+                # Entities (bases) don't need convergence
+                self._finish(True)
+
+    def _advance_convergence(self) -> None:
+        """Check convergence one step at a time."""
+        cfg = self._controller.config
+        state = self._state
+        data = self._controller.data
+
+        current_pos = data.qpos[state.joint_qpos_indices]
+        pos_error = np.abs(state.target_position - current_pos)
+        current_vel = data.qvel[state.joint_qvel_indices]
+
+        if np.all(pos_error < cfg.position_tolerance) and np.all(
+            np.abs(current_vel) < cfg.velocity_tolerance
+        ):
+            self._finish(True)
+            return
+
+        self._convergence_steps += 1
+        if self._convergence_steps >= cfg.convergence_timeout_steps:
+            logger.warning(
+                "Convergence timeout for %s: max_pos_err=%.2f° (limit %.2f°)",
+                self._entity_name,
+                np.rad2deg(float(np.max(pos_error))),
+                np.rad2deg(cfg.position_tolerance),
+            )
+            self._finish(True)  # timed out but close enough
+
+    def _finish(self, success: bool) -> None:
+        self._done = True
+        if not self._future.done():
+            self._future.set_result(success)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +322,9 @@ class PhysicsController:
                 target_velocity=np.zeros(len(qpos_idx)),
             )
 
+        # Active non-blocking trajectory runners (arm_name → TrajectoryRunner)
+        self._runners: dict[str, TrajectoryRunner] = {}
+
         # Initialize qpos/qvel/ctrl to targets (prevents violent jumps)
         for state in self._arms.values():
             data.qpos[state.joint_qpos_indices] = state.target_position
@@ -241,9 +382,10 @@ class PhysicsController:
         Uses full ``lookahead_time`` for velocity feedforward. For reactive
         streaming control, use :meth:`step_reactive` instead.
         """
-        # Arm actuators: position + velocity feedforward
+        # Arm actuators: position + velocity feedforward (per-arm lookahead)
         for state in self._arms.values():
-            q_cmd = state.target_position + self.lookahead_time * state.target_velocity
+            la = state.lookahead if state.lookahead is not None else self.lookahead_time
+            q_cmd = state.target_position + la * state.target_velocity
             self.data.ctrl[state.actuator_ids] = q_cmd
 
         # Entity actuators (bases, etc.): same feedforward
@@ -383,6 +525,77 @@ class PhysicsController:
             velocity_tolerance,
         )
         return False
+
+    # -- Non-blocking trajectory execution ------------------------------------
+
+    def start_trajectory(
+        self,
+        entity_name: str,
+        trajectory: Trajectory,
+        abort_fn: Callable[[], bool] | None = None,
+    ) -> Future[bool]:
+        """Start a non-blocking trajectory on an arm or entity.
+
+        Returns a Future that resolves to True when the trajectory completes
+        (and the arm converges, if applicable), or False if aborted. The
+        caller blocks on the Future while :meth:`advance_all` (called by
+        the event loop's tick) drives the trajectory forward one waypoint
+        per cycle.
+
+        Args:
+            entity_name: Which arm or entity to execute on.
+            trajectory: Time-parameterized trajectory.
+            abort_fn: Per-entity abort check. Runner stops when this returns True.
+
+        Returns:
+            Future[bool] — resolves when trajectory finishes.
+        """
+        # Resolve state for DOF validation
+        if entity_name in self._arms:
+            state = self._arms[entity_name]
+        elif entity_name in self._entities:
+            state = self._entities[entity_name]
+        else:
+            raise ValueError(f"Unknown arm or entity: {entity_name}")
+
+        if trajectory.dof != len(state.joint_qpos_indices):
+            raise ValueError(
+                f"Trajectory DOF {trajectory.dof} doesn't match "
+                f"joint count {len(state.joint_qpos_indices)}"
+            )
+
+        runner = TrajectoryRunner(self, entity_name, trajectory, abort_fn)
+        self._runners[entity_name] = runner
+        logger.debug(
+            "Started trajectory on %s (%d waypoints)",
+            entity_name,
+            trajectory.num_waypoints,
+        )
+        return runner.future
+
+    def advance_all(self) -> None:
+        """Advance all active trajectory runners one waypoint each.
+
+        Called by the event loop's tick() before :meth:`step`. Runners that
+        are done are automatically removed.
+        """
+        if not self._runners:
+            return
+
+        done_arms = []
+        for arm_name, runner in self._runners.items():
+            runner.advance()
+            if runner.done:
+                done_arms.append(arm_name)
+
+        for arm_name in done_arms:
+            del self._runners[arm_name]
+
+    def has_active_runner(self, arm_name: str | None = None) -> bool:
+        """Check if any (or a specific) arm has an active trajectory runner."""
+        if arm_name is not None:
+            return arm_name in self._runners
+        return bool(self._runners)
 
     # -- Gripper control ----------------------------------------------------
 

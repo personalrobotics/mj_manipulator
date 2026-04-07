@@ -7,6 +7,11 @@ MuJoCo is not thread-safe — concurrent mj_step/mj_forward calls segfault.
 This module provides a PhysicsEventLoop that ensures all MuJoCo access
 happens on one thread. Other threads submit work via Futures.
 
+Design follows the game loop / update method pattern: tick() is the single
+owner of the physics step. Trajectory runners and teleop controllers are
+target providers that write to arm state each tick. One mj_step per cycle
+with all arms' targets applied.
+
 Usage (from geodude console.py)::
 
     loop = PhysicsEventLoop()
@@ -30,7 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
-    pass
+    from mj_manipulator.physics_controller import PhysicsController
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +56,14 @@ class PhysicsEventLoop:
     through SimContext methods which dispatch automatically.
 
     The owner thread calls tick() in a loop (typically an IPython inputhook).
-    Each tick drains the command queue, steps active teleop controllers,
-    and runs an idle physics step if nothing else stepped.
+    Each tick:
+
+    1. Processes queued commands (fast — e.g. starting a trajectory runner)
+    2. Advances active trajectory runners (writes targets)
+    3. Steps active teleop controllers (writes targets)
+    4. Calls controller.step() — ONE mj_step with all arms
+    5. Syncs the viewer
+    6. Falls back to idle step if nothing else ran
     """
 
     def __init__(self) -> None:
@@ -60,8 +71,19 @@ class PhysicsEventLoop:
         self._owner_thread: int = threading.get_ident()
         self._teleop_entries: list[tuple[Any, Any]] = []  # (controller, panel)
         self._teleop_lock = threading.Lock()  # protects _teleop_entries
+        self._controller: PhysicsController | None = None
         self._idle_step_fn: Callable[[], None] | None = None
         self._viewer_sync_fn: Callable[[], None] | None = None
+
+    # -- Controller setup (called from SimContext.__enter__) ------------------
+
+    def set_controller(self, controller: PhysicsController | None) -> None:
+        """Set the PhysicsController that tick() drives.
+
+        When set, tick() calls controller.advance_all() and controller.step()
+        each cycle. When None, falls back to idle_step_fn.
+        """
+        self._controller = controller
 
     # -- Public API (any thread) ---------------------------------------------
 
@@ -121,11 +143,65 @@ class PhysicsEventLoop:
     def tick(self) -> None:
         """Process one event loop cycle. Called from the inputhook.
 
-        Priority order:
-        1. Queued commands (chat trajectory, etc.) — at most one per tick
-        2. Active teleop controllers
-        3. Idle physics step (hold position)
+        When a PhysicsController is set (tick-driven mode):
+
+        1. Process all queued commands (fast — start runners, etc.)
+        2. Advance active trajectory runners (write targets)
+        3. Step active teleop controllers (write targets)
+        4. controller.step() — ONE mj_step with all arms
+        5. Sync viewer
+
+        When no controller is set (legacy mode):
+
+        1. Process one queued command (may block — e.g. execute)
+        2. Step active teleop controllers
+        3. Idle physics step
         """
+        if self._controller is not None:
+            self._tick_driven()
+        else:
+            self._tick_legacy()
+
+    def _tick_driven(self) -> None:
+        """Tick-driven mode: controller owns physics, runners provide targets."""
+        # 1. Advance active trajectory runners (writes targets)
+        #    Runs BEFORE commands so that abort flags set by preempt()
+        #    are seen before _do_activate clears them.
+        self._controller.advance_all()
+
+        # 2. Process ALL queued commands (they're fast — start runners, activate teleop)
+        while True:
+            try:
+                cmd = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                result = cmd.fn()
+                cmd.future.set_result(result)
+            except Exception as e:
+                cmd.future.set_exception(e)
+
+        # 3. Step active teleop controllers (writes targets, no mj_step)
+        with self._teleop_lock:
+            entries = list(self._teleop_entries)
+        for controller, panel in entries:
+            if controller.is_active:
+                try:
+                    state = controller.step()
+                    if panel is not None:
+                        panel._update_status(state)
+                except Exception as e:
+                    logger.warning("Teleop step error: %s", e)
+                    controller.deactivate()
+                    if panel is not None:
+                        panel._on_teleop_error()
+
+        # 4. Single physics step for ALL arms
+        # (PhysicsController.step → _step_physics handles throttled viewer sync)
+        self._controller.step()
+
+    def _tick_legacy(self) -> None:
+        """Legacy mode: backwards compatible with blocking execute()."""
         stepped = False
 
         # 1. Process one queued command (may block for seconds — e.g. execute)
@@ -134,8 +210,6 @@ class PhysicsEventLoop:
         except queue.Empty:
             pass
         else:
-            # Deactivate all teleop controllers before running a command —
-            # the command (trajectory, grasp, etc.) needs exclusive control.
             self._deactivate_all_teleop()
             try:
                 result = cmd.fn()
@@ -143,8 +217,6 @@ class PhysicsEventLoop:
             except Exception as e:
                 cmd.future.set_exception(e)
             stepped = True
-            # Return after a blocking command so the inputhook can check
-            # input_is_ready() before processing more.
             return
 
         # 2. Step active teleop controllers
@@ -163,7 +235,6 @@ class PhysicsEventLoop:
                         panel._on_teleop_error()
                 stepped = True
 
-        # Sync viewer after teleop steps
         if stepped and self._viewer_sync_fn is not None:
             try:
                 self._viewer_sync_fn()
