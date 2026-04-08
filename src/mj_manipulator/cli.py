@@ -47,30 +47,37 @@ def main() -> None:
 
     robot = _setup_robot(args.robot, objects)
 
+    arm_name = list(robot.arms.keys())[0]
+
     def commands():
         """Print available commands."""
         print(
-            """
+            f"""
 Quick Reference
 ===============
 
+Scene:
+  robot.find_objects()              — list all graspable objects
+  robot.get_object_pose("can_0")    — 4x4 pose matrix
+  robot.holding()                   — (arm, name) or None
+
 Actions:
-  pickup()                — pick up nearest reachable object
-  pickup("can_0")         — pick up specific object
-  place("yellow_tote")    — place in recycling bin
-  place("worktop")        — place on table surface
-  go_home()               — return arm to ready
+  robot.pickup()                    — pick up nearest reachable object
+  robot.pickup("can_0")             — pick up specific object
+  robot.place("yellow_tote")        — place in recycling bin
+  robot.place("worktop")            — place on table surface
+  robot.go_home()                   — return arm to ready
 
 Arm:
-  robot.arms["ur5e"].get_ee_pose()   — end-effector 4x4 pose
-  robot.arms["ur5e"].get_joint_positions()
+  robot.arms["{arm_name}"].get_ee_pose()
+  robot.arms["{arm_name}"].get_joint_positions()
 
 Teleop:
   Click "Activate" in the viser viewer
 
 IPython:
   robot.<tab>             — tab completion
-  ?pickup                 — docstring
+  ?robot.pickup           — docstring
   commands()              — this help
 """
         )
@@ -153,6 +160,50 @@ class _SimpleRobot:
             else:
                 self._grasp_source = _NullGraspSource()
         return self._grasp_source
+
+    def pickup(self, target=None, **kwargs):
+        """Pick up an object."""
+        from mj_manipulator.primitives import pickup
+
+        return pickup(self, target, **kwargs)
+
+    def place(self, destination=None, **kwargs):
+        """Place the held object."""
+        from mj_manipulator.primitives import place
+
+        return place(self, destination, **kwargs)
+
+    def go_home(self, **kwargs):
+        """Return to ready configuration."""
+        from mj_manipulator.primitives import go_home
+
+        return go_home(self, **kwargs)
+
+    def find_objects(self, target=None):
+        """List graspable objects in the scene."""
+        if target:
+            return [o for o in self.grasp_source.get_graspable_objects() if target in o]
+        return self.grasp_source.get_graspable_objects()
+
+    def holding(self):
+        """Get (arm_name, object_name) if holding, else None."""
+        for arm_name, arm in self.arms.items():
+            if arm.gripper and arm.gripper.is_holding and arm.gripper.held_object:
+                return (arm_name, arm.gripper.held_object)
+        return None
+
+    def get_object_pose(self, body_name):
+        """Get 4x4 world-frame pose of a body."""
+        import mujoco as mj
+        import numpy as np
+
+        bid = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_BODY, body_name)
+        if bid < 0:
+            raise ValueError(f"Body not found: {body_name}")
+        pose = np.eye(4)
+        pose[:3, :3] = self.data.xmat[bid].reshape(3, 3)
+        pose[:3, 3] = self.data.xpos[bid]
+        return pose
 
     @property
     def _active_context(self):
