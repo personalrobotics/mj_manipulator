@@ -47,6 +47,34 @@ def main() -> None:
 
     robot = _setup_robot(args.robot, objects)
 
+    def commands():
+        """Print available commands."""
+        print(
+            """
+Quick Reference
+===============
+
+Actions:
+  pickup()                — pick up nearest reachable object
+  pickup("can_0")         — pick up specific object
+  place("yellow_tote")    — place in recycling bin
+  place("worktop")        — place on table surface
+  go_home()               — return arm to ready
+
+Arm:
+  robot.arms["ur5e"].get_ee_pose()   — end-effector 4x4 pose
+  robot.arms["ur5e"].get_joint_positions()
+
+Teleop:
+  Click "Activate" in the viser viewer
+
+IPython:
+  robot.<tab>             — tab completion
+  ?pickup                 — docstring
+  commands()              — this help
+"""
+        )
+
     from mj_manipulator.console import start_console
 
     start_console(
@@ -54,6 +82,7 @@ def main() -> None:
         physics=args.physics,
         viser=not args.no_viser,
         robot_name=args.robot.upper(),
+        extra_ns={"commands": commands},
     )
 
 
@@ -272,11 +301,11 @@ def _setup_franka(scene_path, objects):
 
 
 def _attach_prl_objects(spec, objects: dict):
-    """Attach prl_assets objects to the scene."""
+    """Attach prl_assets objects + table + recycling bin to the scene."""
     import mujoco
     from prl_assets import OBJECTS_DIR
 
-    # Simple table
+    # Table
     table = spec.worldbody.add_body()
     table.name = "table"
     table.pos = [0.45, -0.20, 0.23]
@@ -285,11 +314,30 @@ def _attach_prl_objects(spec, objects: dict):
     g.size = [0.15, 0.15, 0.23]
     g.rgba = [0.4, 0.3, 0.2, 1.0]
 
+    # Worktop site on the table surface (for surface placement)
+    s = table.add_site()
+    s.name = "worktop"
+    s.pos = [0, 0, 0.23]  # top of the table
+    s.size = [0.12, 0.12, 0.001]
+    s.type = mujoco.mjtGeom.mjGEOM_BOX
+    s.rgba = [0, 0, 0, 0]  # invisible
+
+    # Recycling bin on the floor
+    from asset_manager import AssetManager
+
+    assets = AssetManager(str(OBJECTS_DIR))
+    try:
+        bin_xml = assets.get_path("yellow_tote", "mujoco")
+        bin_spec = mujoco.MjSpec.from_file(bin_xml)
+        f = spec.worldbody.add_frame()
+        f.pos = [0.25, -0.70, 0.0]
+        f.attach_body(bin_spec.worldbody.first_body(), prefix="yellow_tote_0/")
+    except (KeyError, TypeError):
+        pass  # no tote model available
+
+    # Attach objects on the table
     idx = 0
     for obj_type, count in objects.items():
-        from asset_manager import AssetManager
-
-        assets = AssetManager(str(OBJECTS_DIR))
         try:
             xml_path = assets.get_path(obj_type, "mujoco")
         except (KeyError, TypeError):
@@ -297,7 +345,6 @@ def _attach_prl_objects(spec, objects: dict):
         for i in range(count):
             obj_spec = mujoco.MjSpec.from_file(xml_path)
             f = spec.worldbody.add_frame()
-            # Spread objects on the table
             x = 0.40 + (idx % 3) * 0.05
             y = -0.25 + (idx // 3) * 0.05
             f.pos = [x, y, 0.46 + 0.05]
