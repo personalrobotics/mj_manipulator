@@ -159,12 +159,16 @@ class _SimpleRobot(RobotBase):
         return super().grasp_source
 
 
-def _save_robot_xml(spec) -> str:
-    """Save assembled robot MjSpec to a temp file for Environment."""
+def _save_robot_xml(spec, source_dir: str) -> str:
+    """Save assembled robot MjSpec to a temp file in the source directory.
+
+    Must be in the same directory as the original scene XML so that
+    relative mesh/texture paths resolve correctly.
+    """
     import tempfile
 
     xml_str = spec.to_xml()
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False)
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False, dir=source_dir)
     f.write(xml_str)
     f.close()
     return f.name
@@ -206,7 +210,7 @@ def _setup_ur5e(scene_path, objects):
 
     # Save assembled robot XML, then use Environment to add objects
     # (Environment handles body naming, registry, and object lifecycle)
-    robot_xml = _save_robot_xml(spec)
+    robot_xml = _save_robot_xml(spec, str(scene_path.parent))
 
     if objects:
         scene_config = _create_scene_config(objects)
@@ -243,7 +247,7 @@ def _setup_franka(scene_path, objects):
     spec = mujoco.MjSpec.from_file(str(scene_path))
     add_franka_ee_site(spec)
 
-    robot_xml = _save_robot_xml(spec)
+    robot_xml = _save_robot_xml(spec, str(scene_path.parent))
 
     if objects:
         scene_config = _create_scene_config(objects)
