@@ -157,6 +157,13 @@ def _setup_franka(objects):
         g.type = mujoco.mjtGeom.mjGEOM_BOX
         g.size = [0.30, 0.30, 0.005]
         g.rgba = [0.6, 0.6, 0.6, 1.0]
+        # Worktop site on plate surface — enables robot.place("worktop")
+        s = plate.add_site()
+        s.name = "worktop"
+        s.pos = [0, 0, 0.005]
+        s.size = [0.25, 0.25, 0.001]
+        s.type = mujoco.mjtGeom.mjGEOM_BOX
+        s.rgba = [0, 0, 0, 0]
 
         # Add yellow_tote to the scene config for recycling
         scene_config = dict(objects)
