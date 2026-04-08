@@ -113,45 +113,47 @@ class _SimpleRobot(RobotBase):
         self._objects_config = None  # set externally after creation
 
     def reset(self):
-        """Reset scene: release objects, return arm home, re-scatter."""
+        """Reset scene to initial state, then re-scatter objects.
+
+        Same pattern as geodude: mj_resetData → hold controller → release
+        grasps → hide objects → re-scatter.
+        """
         import mujoco
 
         self.request_abort()
         self.clear_abort()
 
-        # Release any held objects
-        for arm_name, arm in self.arms.items():
-            if arm.gripper and arm.gripper.is_holding:
-                if self._context is not None:
-                    self._context.arm(arm_name).release()
+        # Reset MuJoCo state (qpos, qvel, ctrl all to defaults)
+        mujoco.mj_resetData(self.model, self.data)
 
-        # Clear grasp manager state
+        # Restore arm to home (model defaults may not be the right config)
+        ready = self.named_poses.get("ready", {})
+        for arm_name, arm in self.arms.items():
+            if arm_name in ready:
+                for i, idx in enumerate(arm.joint_qpos_indices):
+                    self.data.qpos[idx] = ready[arm_name][i]
+            if arm.gripper and arm.gripper.actuator_id is not None:
+                self.data.ctrl[arm.gripper.actuator_id] = arm.gripper.ctrl_open
+
+        # Sync controller targets to new positions
+        if self._context is not None:
+            self._context.hold()
+
+        # Release grasps
         for arm_name in list(self.arms.keys()):
             for obj in list(self.grasp_manager.get_grasped_by(arm_name)):
                 self.grasp_manager.mark_released(obj)
                 self.grasp_manager.detach_object(obj)
 
-        # Hide all objects
+        # Hide all objects, then re-scatter
         if self._env.registry is not None:
             for obj_type in list(self._env.registry.objects.keys()):
                 for name in list(self._env.registry.objects[obj_type]["instances"]):
                     if self._env.registry.is_active(name):
                         self._env.registry.hide(name)
 
-        # Reset arm to home
-        ready = self.named_poses.get("ready", {})
-        for arm_name, arm in self.arms.items():
-            if arm_name in ready:
-                for i, idx in enumerate(arm.joint_qpos_indices):
-                    self.data.qpos[idx] = ready[arm_name][i]
-            if arm.gripper:
-                arm.gripper.kinematic_open()
-                if arm.gripper.actuator_id is not None:
-                    self.data.ctrl[arm.gripper.actuator_id] = arm.gripper.ctrl_open
-
         mujoco.mj_forward(self.model, self.data)
 
-        # Re-scatter objects
         if self._objects_config and self._env.registry is not None:
             all_objects = dict(self._objects_config)
             all_objects["yellow_tote"] = 1
@@ -159,8 +161,6 @@ class _SimpleRobot(RobotBase):
 
         if self._context is not None:
             self._context.sync()
-            if hasattr(self._context, "hold"):
-                self._context.hold()
 
         print("Scene reset.")
 
