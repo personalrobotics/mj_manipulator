@@ -67,7 +67,7 @@ class PrlAssetsGraspSource:
         obj_type = _instance_to_type(object_name)
         if obj_type is None:
             return []
-        return self._generate_tsrs_for_object(object_name, obj_type)
+        return self._generate_tsrs_for_object(object_name, obj_type, hand_type)
 
     def get_placements(self, destination: str, object_name: str) -> list:
         """Get placement TSRs for an object at a destination."""
@@ -204,11 +204,10 @@ class PrlAssetsGraspSource:
                 matches.append((body, obj_type))
         return matches
 
-    def _generate_tsrs_for_object(self, body_name: str, obj_type: str) -> list:
+    def _generate_tsrs_for_object(self, body_name: str, obj_type: str, hand_type: str = "parallel_jaw") -> list:
         """Generate grasp TSRs for a single object from its prl_assets geometry."""
         from asset_manager import AssetManager
         from prl_assets import OBJECTS_DIR
-        from tsr.hands import Robotiq2F140
 
         assets = AssetManager(str(OBJECTS_DIR))
         try:
@@ -221,7 +220,7 @@ class PrlAssetsGraspSource:
         except ValueError:
             return []
 
-        hand = Robotiq2F140()
+        hand = _get_hand(hand_type)
         if gp.get("type") == "cylinder":
             T_bottom = obj_pose.copy()
             local_z = obj_pose[:3, 2]
@@ -442,6 +441,15 @@ class PrlAssetsGraspSource:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+
+def _get_hand(hand_type: str):
+    """Get the TSR hand model for a gripper type."""
+    from tsr.hands import FrankaHand, Robotiq2F140
+
+    if "franka" in hand_type.lower():
+        return FrankaHand()
+    return Robotiq2F140()
 
 
 def _instance_to_type(name: str) -> str | None:
