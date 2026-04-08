@@ -21,7 +21,6 @@ dependencies = [
     "tsr @ git+https://github.com/personalrobotics/tsr.git",
     "eaik",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
-    "geodude-assets @ git+https://github.com/personalrobotics/geodude_assets.git",
 ]
 
 [tool.uv.sources]
@@ -29,7 +28,6 @@ mj-environment = { workspace = true }
 pycbirrt = { workspace = true }
 tsr = { workspace = true }
 prl-assets = { workspace = true }
-geodude-assets = { workspace = true }
 
 [project.optional-dependencies]
 bt = [
