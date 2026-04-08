@@ -90,7 +90,7 @@ class _SimpleRobot:
     to bring up a new robot with the full console experience.
     """
 
-    def __init__(self, env, arm, home_config, grasp_source=None):
+    def __init__(self, env, arm, home_config, has_objects=False):
         import threading
 
         self.model = env.model
@@ -102,14 +102,27 @@ class _SimpleRobot:
 
         self.grasp_manager = arm.grasp_manager or _GM(self.model, self.data)
         self.named_poses = {"ready": {arm.config.name: list(home_config)}}
-        self._grasp_source = grasp_source
+        self._has_objects = has_objects
+        self._grasp_source = None
         self._context = None
         self._abort_event = threading.Event()
 
     @property
     def grasp_source(self):
         if self._grasp_source is None:
-            self._grasp_source = _NullGraspSource()
+            if self._has_objects:
+                from mj_manipulator.grasp_sources.prl_assets import PrlAssetsGraspSource
+
+                registry = getattr(self._env, "registry", None)
+                self._grasp_source = PrlAssetsGraspSource(
+                    self.model,
+                    self.data,
+                    self.grasp_manager,
+                    self.arms,
+                    registry=registry,
+                )
+            else:
+                self._grasp_source = _NullGraspSource()
         return self._grasp_source
 
     @property
@@ -220,7 +233,7 @@ def _setup_ur5e(scene_path, objects):
         env.data.qpos[idx] = UR5E_HOME[i]
     mujoco.mj_forward(env.model, env.data)
 
-    return _SimpleRobot(env, arm, UR5E_HOME)
+    return _SimpleRobot(env, arm, UR5E_HOME, has_objects=bool(objects))
 
 
 def _setup_franka(scene_path, objects):
@@ -255,7 +268,7 @@ def _setup_franka(scene_path, objects):
         env.data.qpos[idx] = FRANKA_HOME[i]
     mujoco.mj_forward(env.model, env.data)
 
-    return _SimpleRobot(env, arm, FRANKA_HOME)
+    return _SimpleRobot(env, arm, FRANKA_HOME, has_objects=bool(objects))
 
 
 def _attach_prl_objects(spec, objects: dict):
