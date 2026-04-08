@@ -179,9 +179,11 @@ def _setup_franka(objects):
         env.data.qpos[idx] = FRANKA_HOME[i]
     mujoco.mj_forward(env.model, env.data)
 
-    # Activate and scatter objects on a table in front of the robot
+    # Activate and scatter objects (include tote from scene_config)
     if objects and env.registry is not None:
-        _scatter_objects(env, objects)
+        all_objects = dict(objects)
+        all_objects["yellow_tote"] = 1
+        _scatter_objects(env, all_objects)
 
     return _SimpleRobot(env, arm, FRANKA_HOME, has_objects=bool(objects))
 
