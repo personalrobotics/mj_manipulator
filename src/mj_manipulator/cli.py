@@ -185,10 +185,6 @@ def _setup_franka(objects):
         all_objects["yellow_tote"] = 1
         _scatter_objects(env, all_objects)
 
-        # Settle physics so objects aren't bouncing when the console starts
-        for _ in range(500):
-            mujoco.mj_step(env.model, env.data)
-
     return _SimpleRobot(env, arm, FRANKA_HOME, has_objects=bool(objects))
 
 
