@@ -51,19 +51,31 @@ def _tick_tree(root: py_trees.behaviour.Behaviour, verbose: bool = False) -> boo
     return root.status == Status.SUCCESS
 
 
-def _deactivate_teleop_for_arms(robot) -> None:
-    """Deactivate teleop on all arms before a user-initiated primitive.
+def _arm_preempted(robot, arm_name: str) -> bool:
+    """Check if an arm was taken by another controller (e.g. teleop)."""
+    ctx = getattr(robot, "_active_context", None)
+    if ctx is None or not hasattr(ctx, "ownership") or ctx.ownership is None:
+        return False
+    from mj_manipulator.ownership import OwnerKind
 
-    Called at the entry of pickup/place/go_home — the user explicitly
-    issued a command, so teleop should yield. Internal retries and
-    recovery within the primitive do NOT call this.
+    kind, _ = ctx.ownership.owner_of(arm_name)
+    return kind not in (OwnerKind.IDLE, OwnerKind.TRAJECTORY)
+
+
+def _deactivate_teleop_for_arms(robot, arms: list[str] | None = None) -> None:
+    """Deactivate teleop on specified arms (or all) before a primitive.
+
+    Args:
+        robot: ManipulationRobot instance.
+        arms: Arm names to deactivate, or None for all arms.
     """
     ctx = getattr(robot, "_active_context", None)
     if ctx is None or not hasattr(ctx, "ownership") or ctx.ownership is None:
         return
     from mj_manipulator.ownership import OwnerKind
 
-    for arm_name in ctx.ownership.arm_names:
+    arm_names = arms if arms is not None else ctx.ownership.arm_names
+    for arm_name in arm_names:
         kind, _ = ctx.ownership.owner_of(arm_name)
         if kind == OwnerKind.TELEOP:
             ctx._deactivate_teleop_for(arm_name)
@@ -85,7 +97,7 @@ def _setup_blackboard(robot, ctx, arm_name: str, arm, ns: str) -> None:
     bb.register_key(key=f"{ns}/robot", access=Access.WRITE)
 
     bb.set("/context", ctx)
-    bb.set("/abort_fn", robot.is_abort_requested)
+    bb.set("/abort_fn", lambda: robot.is_abort_requested() or _arm_preempted(robot, arm_name))
     bb.set(f"{ns}/arm", arm)
     bb.set(f"{ns}/arm_name", arm_name)
     bb.set(f"{ns}/grasp_source", robot.grasp_source)
@@ -173,6 +185,10 @@ def _pickup_inner(robot, ctx, target, *, arm, verbose) -> bool:
         tree = full_pickup(ns)
         if _tick_tree(tree, verbose=verbose):
             return True
+
+        # Stop if abort or this arm was preempted (e.g. teleop)
+        if robot.is_abort_requested() or _arm_preempted(robot, side):
+            return False
 
     if target:
         logger.warning("Pickup failed for target '%s'", target)
@@ -273,6 +289,8 @@ def go_home(
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
     robot.clear_abort()
+    arms_to_home = [arm] if arm is not None else list(robot.arms.keys())
+    _deactivate_teleop_for_arms(robot, arms_to_home)
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
