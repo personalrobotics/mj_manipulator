@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+from mj_manipulator.robot import RobotBase
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -119,29 +121,26 @@ def _setup_robot(robot_type: str, objects: dict):
     return robot
 
 
-class _SimpleRobot:
-    """Minimal ManipulationRobot for single-arm use with the generic console.
+class _SimpleRobot(RobotBase):
+    """Minimal robot for the CLI demo. Inherits all convenience methods
+    from RobotBase (pickup, place, go_home, find_objects, etc.).
 
-    This is the reference implementation showing how little code is needed
-    to bring up a new robot with the full console experience.
+    This is the reference implementation — ~20 LOC on top of RobotBase.
     """
 
     def __init__(self, env, arm, home_config, has_objects=False):
-        import threading
-
-        self.model = env.model
-        self.data = env.data
-        self._env = env
-        self._arm = arm
-        self.arms = {arm.config.name: arm}
         from mj_manipulator.grasp_manager import GraspManager as _GM
 
-        self.grasp_manager = arm.grasp_manager or _GM(self.model, self.data)
-        self.named_poses = {"ready": {arm.config.name: list(home_config)}}
+        gm = arm.grasp_manager or _GM(env.model, env.data)
+        super().__init__(
+            model=env.model,
+            data=env.data,
+            arms={arm.config.name: arm},
+            grasp_manager=gm,
+            named_poses={"ready": {arm.config.name: list(home_config)}},
+        )
+        self._env = env
         self._has_objects = has_objects
-        self._grasp_source = None
-        self._context = None
-        self._abort_event = threading.Event()
 
     @property
     def grasp_source(self):
@@ -157,122 +156,7 @@ class _SimpleRobot:
                     self.arms,
                     registry=registry,
                 )
-            else:
-                self._grasp_source = _NullGraspSource()
-        return self._grasp_source
-
-    def pickup(self, target=None, **kwargs):
-        """Pick up an object."""
-        from mj_manipulator.primitives import pickup
-
-        return pickup(self, target, **kwargs)
-
-    def place(self, destination=None, **kwargs):
-        """Place the held object."""
-        from mj_manipulator.primitives import place
-
-        return place(self, destination, **kwargs)
-
-    def go_home(self, **kwargs):
-        """Return to ready configuration."""
-        from mj_manipulator.primitives import go_home
-
-        return go_home(self, **kwargs)
-
-    def find_objects(self, target=None):
-        """List graspable objects in the scene."""
-        if target:
-            return [o for o in self.grasp_source.get_graspable_objects() if target in o]
-        return self.grasp_source.get_graspable_objects()
-
-    def holding(self):
-        """Get (arm_name, object_name) if holding, else None."""
-        for arm_name, arm in self.arms.items():
-            if arm.gripper and arm.gripper.is_holding and arm.gripper.held_object:
-                return (arm_name, arm.gripper.held_object)
-        return None
-
-    def get_object_pose(self, body_name):
-        """Get 4x4 world-frame pose of a body."""
-        import mujoco as mj
-        import numpy as np
-
-        bid = mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_BODY, body_name)
-        if bid < 0:
-            raise ValueError(f"Body not found: {body_name}")
-        pose = np.eye(4)
-        pose[:3, :3] = self.data.xmat[bid].reshape(3, 3)
-        pose[:3, 3] = self.data.xpos[bid]
-        return pose
-
-    @property
-    def _active_context(self):
-        return self._context
-
-    @_active_context.setter
-    def _active_context(self, ctx):
-        self._context = ctx
-
-    def sim(self, *, physics=True, headless=False, viewer=None, event_loop=None):
-        from mj_manipulator.sim_context import SimContext
-
-        inner = SimContext(
-            self.model,
-            self.data,
-            self.arms,
-            physics=physics,
-            headless=headless,
-            viewer=viewer,
-            event_loop=event_loop,
-            abort_fn=self.is_abort_requested,
-        )
-        return _SimContextWrapper(inner, self)
-
-    def request_abort(self):
-        if self._context is not None and hasattr(self._context, "ownership") and self._context.ownership is not None:
-            self._context.ownership.abort_all()
-        self._abort_event.set()
-
-    def clear_abort(self):
-        if self._context is not None and hasattr(self._context, "ownership") and self._context.ownership is not None:
-            self._context.ownership.clear_all()
-        self._abort_event.clear()
-
-    def is_abort_requested(self):
-        return self._abort_event.is_set()
-
-
-class _SimContextWrapper:
-    """Sets robot._active_context on enter/exit."""
-
-    def __init__(self, inner, robot):
-        self._inner = inner
-        self._robot = robot
-
-    def __enter__(self):
-        ctx = self._inner.__enter__()
-        self._robot._active_context = ctx
-        return ctx
-
-    def __exit__(self, *args):
-        self._robot._active_context = None
-        return self._inner.__exit__(*args)
-
-
-class _NullGraspSource:
-    """GraspSource that returns empty results (no objects to grasp)."""
-
-    def get_grasps(self, object_name, hand_type):
-        return []
-
-    def get_placements(self, destination, object_name):
-        return []
-
-    def get_graspable_objects(self):
-        return []
-
-    def get_place_destinations(self, object_name):
-        return []
+        return super().grasp_source
 
 
 def _setup_ur5e(scene_path, objects):
