@@ -149,16 +149,20 @@ def _setup_franka(objects):
     if objects:
         from prl_assets import OBJECTS_DIR
 
-        # Add a table for objects to sit on
-        table = spec.worldbody.add_body()
-        table.name = "table"
-        table.pos = [0.45, 0.0, 0.23]
-        g = table.add_geom()
+        # Flat plate on the ground in front of the robot for objects
+        plate = spec.worldbody.add_body()
+        plate.name = "plate"
+        plate.pos = [0.5, 0.0, 0.005]
+        g = plate.add_geom()
         g.type = mujoco.mjtGeom.mjGEOM_BOX
-        g.size = [0.15, 0.15, 0.23]
-        g.rgba = [0.4, 0.3, 0.2, 1.0]
+        g.size = [0.15, 0.15, 0.005]
+        g.rgba = [0.6, 0.6, 0.6, 1.0]
 
-        env = Environment.from_spec(spec, objects_dir=str(OBJECTS_DIR), scene_config=objects)
+        # Add yellow_tote to the scene config for recycling
+        scene_config = dict(objects)
+        scene_config["yellow_tote"] = 1
+
+        env = Environment.from_spec(spec, objects_dir=str(OBJECTS_DIR), scene_config=scene_config)
     else:
         model = spec.compile()
         env = Environment.from_model(model)
@@ -183,7 +187,7 @@ def _setup_franka(objects):
 
 
 def _scatter_objects(env, objects: dict):
-    """Activate objects and place them on a table in front of the robot."""
+    """Activate and scatter objects on the plate, position tote to the side."""
     import mujoco
     import numpy as np
     from asset_manager import AssetManager
@@ -192,21 +196,33 @@ def _scatter_objects(env, objects: dict):
 
     assets = AssetManager(str(OBJECTS_DIR))
 
-    # Table: 30x30cm, 46cm tall, centered at (0.45, 0, 0.46)
-    table_surface = np.eye(4)
-    table_surface[:3, 3] = [0.45, 0.0, 0.46]
+    # Plate surface: ground level in front of robot
+    plate_surface = np.eye(4)
+    plate_surface[:3, 3] = [0.5, 0.0, 0.01]
     placer = StablePlacer(0.12, 0.12)
 
     placed_positions = []
     for obj_type, count in objects.items():
-        if isinstance(count, dict):
+        if isinstance(count, int):
+            pass
+        elif isinstance(count, dict):
             count = count.get("count", 1)
+        else:
+            continue
+
+        # Position tote to the side, not on the plate
         try:
             gp = assets.get(obj_type)["geometric_properties"]
         except (KeyError, TypeError):
             continue
 
         geo = gp.get("type")
+        if geo in ("open_box", "tote"):
+            # Place container to the side
+            env.registry.activate(obj_type, pos=[0.3, -0.5, 0.0])
+            mujoco.mj_forward(env.model, env.data)
+            continue
+
         if geo == "cylinder":
             templates = placer.place_cylinder(gp["radius"], gp["height"])
         elif geo == "box":
@@ -218,19 +234,16 @@ def _scatter_objects(env, objects: dict):
             continue
 
         for _ in range(count):
-            tsr = templates[0].instantiate(table_surface)
-            # Sample a non-colliding position
+            tsr = templates[0].instantiate(plate_surface)
             for _attempt in range(50):
                 T = tsr.sample()
                 pos = T[:3, 3]
-                min_sep = 0.06
-                if all(np.linalg.norm(pos[:2] - np.array(p[:2])) > min_sep for p in placed_positions):
+                if all(np.linalg.norm(pos[:2] - np.array(p[:2])) > 0.06 for p in placed_positions):
                     break
 
             name = env.registry.activate(obj_type, pos=list(pos))
             placed_positions.append(list(pos))
 
-            # Apply full pose (includes randomized yaw)
             body_id = mujoco.mj_name2id(env.model, mujoco.mjtObj.mjOBJ_BODY, name)
             jnt_id = env.model.body_jntadr[body_id]
             qpos_adr = env.model.jnt_qposadr[jnt_id]
