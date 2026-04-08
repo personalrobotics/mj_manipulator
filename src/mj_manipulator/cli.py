@@ -159,19 +159,43 @@ class _SimpleRobot(RobotBase):
         return super().grasp_source
 
 
+def _save_robot_xml(spec) -> str:
+    """Save assembled robot MjSpec to a temp file for Environment."""
+    import tempfile
+
+    xml_str = spec.to_xml()
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False)
+    f.write(xml_str)
+    f.close()
+    return f.name
+
+
+def _create_scene_config(objects: dict) -> str:
+    """Create a temp scene_config.yaml from objects dict."""
+    import tempfile
+
+    import yaml
+
+    config = {"objects": {obj_type: {"count": count} for obj_type, count in objects.items()}}
+    f = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+    yaml.dump(config, f)
+    f.close()
+    return f.name
+
+
 def _setup_ur5e(scene_path, objects):
     """Set up UR5e + Robotiq."""
     import geodude_assets
     import mujoco
     from mj_environment import Environment
+    from prl_assets import OBJECTS_DIR
 
     from mj_manipulator.arms.ur5e import UR5E_HOME, UR5E_ROBOTIQ_EE_SITE, create_ur5e_arm
     from mj_manipulator.grasp_manager import GraspManager
     from mj_manipulator.grippers.robotiq import RobotiqGripper
 
+    # Assemble robot: UR5e + Robotiq gripper
     spec = mujoco.MjSpec.from_file(str(scene_path))
-
-    # Attach Robotiq gripper
     robotiq_path = geodude_assets.MODELS_DIR / "robotiq_2f140" / "2f140.xml"
     robotiq_spec = mujoco.MjSpec.from_file(str(robotiq_path))
     wrist = spec.worldbody.find_child("wrist_3_link")
@@ -180,16 +204,21 @@ def _setup_ur5e(scene_path, objects):
     frame.quat = [-1, 1, 0, 0]
     frame.attach_body(robotiq_spec.worldbody.first_body(), prefix="gripper/")
 
-    # Add objects if specified
+    # Save assembled robot XML, then use Environment to add objects
+    # (Environment handles body naming, registry, and object lifecycle)
+    robot_xml = _save_robot_xml(spec)
+
     if objects:
-        _attach_prl_objects(spec, objects)
+        scene_config = _create_scene_config(objects)
+        env = Environment(
+            base_scene_xml=robot_xml,
+            objects_dir=str(OBJECTS_DIR),
+            scene_config_yaml=scene_config,
+        )
+    else:
+        env = Environment(base_scene_xml=robot_xml)
 
-    model = spec.compile()
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    env = Environment.from_model(model, data)
     gm = GraspManager(env.model, env.data)
-
     gripper = RobotiqGripper(env.model, env.data, "ur5e", prefix="gripper/", grasp_manager=gm)
     arm = create_ur5e_arm(env, ee_site=UR5E_ROBOTIQ_EE_SITE, gripper=gripper, grasp_manager=gm)
 
@@ -204,23 +233,29 @@ def _setup_franka(scene_path, objects):
     """Set up Franka Panda."""
     import mujoco
     from mj_environment import Environment
+    from prl_assets import OBJECTS_DIR
 
     from mj_manipulator.arms.franka import FRANKA_HOME, add_franka_ee_site, create_franka_arm
     from mj_manipulator.grasp_manager import GraspManager
     from mj_manipulator.grippers.franka import FrankaGripper
 
+    # Assemble robot: Franka + EE site
     spec = mujoco.MjSpec.from_file(str(scene_path))
     add_franka_ee_site(spec)
 
+    robot_xml = _save_robot_xml(spec)
+
     if objects:
-        _attach_prl_objects(spec, objects)
+        scene_config = _create_scene_config(objects)
+        env = Environment(
+            base_scene_xml=robot_xml,
+            objects_dir=str(OBJECTS_DIR),
+            scene_config_yaml=scene_config,
+        )
+    else:
+        env = Environment(base_scene_xml=robot_xml)
 
-    model = spec.compile()
-    data = mujoco.MjData(model)
-    mujoco.mj_forward(model, data)
-    env = Environment.from_model(model, data)
     gm = GraspManager(env.model, env.data)
-
     gripper = FrankaGripper(env.model, env.data, "franka", grasp_manager=gm)
     arm = create_franka_arm(env, gripper=gripper, grasp_manager=gm)
 
