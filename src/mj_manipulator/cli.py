@@ -155,7 +155,7 @@ def _setup_franka(objects):
         plate.pos = [0.5, 0.0, 0.005]
         g = plate.add_geom()
         g.type = mujoco.mjtGeom.mjGEOM_BOX
-        g.size = [0.15, 0.15, 0.005]
+        g.size = [0.30, 0.30, 0.005]
         g.rgba = [0.6, 0.6, 0.6, 1.0]
 
         # Add yellow_tote to the scene config for recycling
@@ -199,7 +199,7 @@ def _scatter_objects(env, objects: dict):
     # Plate surface: ground level in front of robot
     plate_surface = np.eye(4)
     plate_surface[:3, 3] = [0.5, 0.0, 0.01]
-    placer = StablePlacer(0.12, 0.12)
+    placer = StablePlacer(0.25, 0.25)
 
     placed_positions = []
     for obj_type, count in objects.items():
@@ -219,7 +219,7 @@ def _scatter_objects(env, objects: dict):
         geo = gp.get("type")
         if geo in ("open_box", "tote"):
             # Place container to the side
-            env.registry.activate(obj_type, pos=[0.3, -0.5, 0.0])
+            env.registry.activate(obj_type, pos=[-0.3, 0.0, 0.0])
             mujoco.mj_forward(env.model, env.data)
             continue
 
