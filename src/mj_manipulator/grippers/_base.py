@@ -28,6 +28,11 @@ class _BaseGripper:
     ``get_actual_position``.
     """
 
+    # Does fully-closed mean "no object held"? True for grippers whose
+    # fingers physically touch (Franka). False for grippers with large
+    # finger travel where fully-closed is still a valid grasp (Robotiq).
+    empty_at_fully_closed: bool = False
+
     def __init__(
         self,
         model: mujoco.MjModel,

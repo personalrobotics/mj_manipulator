@@ -198,6 +198,8 @@ class RobotiqGripper(_BaseGripper):
     """
 
     hand_type: str = "robotiq"
+    # Robotiq 2F-140 has 14cm finger travel — fully-closed can still hold
+    empty_at_fully_closed: bool = False
 
     def __init__(
         self,

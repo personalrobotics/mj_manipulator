@@ -74,6 +74,8 @@ class FrankaGripper(_BaseGripper):
     """
 
     hand_type: str = "franka"
+    # Franka fingers physically touch at fully-closed → can't hold anything
+    empty_at_fully_closed: bool = True
 
     def __init__(
         self,
