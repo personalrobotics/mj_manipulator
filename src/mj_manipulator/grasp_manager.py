@@ -276,12 +276,9 @@ def detect_grasped_object(
     # Filter by bilateral contact requirement
     non_empty_groups = [g for g, ids in group_body_ids.items() if ids]
     if require_bilateral and len(non_empty_groups) < 2:
-        logger.warning(
-            "require_bilateral=True but only %d non-empty finger group(s) found "
-            "(body names may not match '/left_' or '/right_' convention); "
-            "falling back to any-contact detection",
-            len(non_empty_groups),
-        )
+        # Finger group inference failed — fall back to any-contact detection.
+        # TODO(#80): replace bilateral heuristic with physics/sensor-based verification.
+        pass
     if require_bilateral and len(non_empty_groups) >= 2:
         bilateral = {
             bid: info for bid, info in object_contacts.items() if all(info.get(g, False) for g in non_empty_groups)
