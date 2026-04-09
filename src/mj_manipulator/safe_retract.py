@@ -16,6 +16,7 @@ Use for:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Callable
 
 import mujoco
@@ -26,6 +27,8 @@ from mj_manipulator.contacts import iter_contacts
 
 if TYPE_CHECKING:
     from mj_manipulator.arm import Arm
+
+logger = logging.getLogger(__name__)
 
 
 def _get_contact_pairs(model: mujoco.MjModel, data: mujoco.MjData) -> set[tuple[int, int]]:
@@ -76,6 +79,7 @@ def safe_retract(
     # Record baseline contacts — these are allowed to persist
     mujoco.mj_forward(model, data)
     baseline = _get_contact_pairs(model, data)
+    logger.info("safe_retract: baseline has %d contacts", len(baseline))
 
     ctrl = CartesianController.from_arm(arm, step_fn=step_fn)
     ctrl.reset()
@@ -100,9 +104,20 @@ def safe_retract(
         current_contacts = _get_contact_pairs(model, data)
         new_contacts = current_contacts - baseline
         if new_contacts:
-            # New collision — stop here and hold position
+            # Translate body IDs to names for diagnostic
+            names = []
+            for b1, b2 in new_contacts:
+                n1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b1) or f"body_{b1}"
+                n2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, b2) or f"body_{b2}"
+                names.append(f"{n1}<->{n2}")
+            logger.info(
+                "safe_retract: stopping at %.3fm (new contacts: %s)",
+                total_distance,
+                ", ".join(names),
+            )
             hold_q = arm.get_joint_positions()
             step_fn(hold_q, np.zeros_like(hold_q))
             break
 
+    logger.info("safe_retract: moved %.3fm", total_distance)
     return total_distance
