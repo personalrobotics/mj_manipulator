@@ -62,6 +62,43 @@ _FRANKA_LOCKED_JOINT_INDEX = 4
 # ---------------------------------------------------------------------------
 
 
+def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) -> None:
+    """Scale Franka gripper actuator to match real hardware grip force.
+
+    The menagerie model's actuator8 under-produces grip force. The real
+    Franka hand grips at 140N (70N per finger). We scale both gain and
+    bias proportionally so the actuator reaches target_force at full close
+    while ctrl=255 can still hold the fingers open.
+
+    Args:
+        model: Compiled MjModel (modified in place).
+        target_force: Desired grip force at full close [N]. Default 140N
+            from the Franka Emika datasheet.
+    """
+    aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
+    if aid < 0:
+        return
+
+    # Actuator force model: force = gain * ctrl + bias[1] * length + bias[2] * velocity
+    # To grip at target_force when ctrl=0 and grasping a typical object:
+    #   target_force = |bias[1]| * length_grasp
+    # To hold open when ctrl=255:
+    #   gain * 255 = |bias[1]| * length_open  (zero net force)
+    length_open = 0.08  # 2 × finger_joint open position (0.04m each)
+    length_grasp = 0.066  # typical grasp (e.g., soda can r=33mm)
+
+    new_bias1 = -target_force / length_grasp
+    new_gain = abs(new_bias1) * length_open / 255.0
+
+    # Scale damping proportionally to bias spring
+    old_bias1 = model.actuator_biasprm[aid, 1]
+    scale = new_bias1 / old_bias1 if old_bias1 != 0 else 1.0
+
+    model.actuator_biasprm[aid, 1] = new_bias1
+    model.actuator_biasprm[aid, 2] *= scale
+    model.actuator_gainprm[aid, 0] = new_gain
+
+
 def add_franka_ee_site(
     spec: mujoco.MjSpec,
     site_name: str = "grasp_site",

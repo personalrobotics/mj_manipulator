@@ -186,7 +186,12 @@ def _setup_franka(objects):
     import mujoco
     from mj_environment import Environment
 
-    from mj_manipulator.arms.franka import FRANKA_HOME, add_franka_ee_site, create_franka_arm
+    from mj_manipulator.arms.franka import (
+        FRANKA_HOME,
+        add_franka_ee_site,
+        create_franka_arm,
+        fix_franka_grip_force,
+    )
     from mj_manipulator.grasp_manager import GraspManager
     from mj_manipulator.grippers.franka import FrankaGripper
     from mj_manipulator.menagerie import menagerie_scene
@@ -229,6 +234,9 @@ def _setup_franka(objects):
     else:
         model = spec.compile()
         env = Environment.from_model(model)
+
+    # Fix menagerie Franka's under-powered grip (140N target from datasheet)
+    fix_franka_grip_force(env.model)
 
     gm = GraspManager(env.model, env.data)
     gripper = FrankaGripper(env.model, env.data, "franka", grasp_manager=gm)
