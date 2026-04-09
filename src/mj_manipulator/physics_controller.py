@@ -696,10 +696,28 @@ class PhysicsController:
                     grasped,
                 )
 
-        # Warn if fully closed with no contacts (missed object)
-        if not grasped:
-            gripper_pos = gripper.get_actual_position()
-            if gripper_pos > cfg.fully_closed_threshold:
+        # Check fully-closed state: for grippers whose fingers physically
+        # touch at fully-closed (e.g. Franka), this means nothing is held.
+        # For grippers with finger travel (e.g. Robotiq 2F-140), fully-closed
+        # is still a valid grasp position.
+        gripper_pos = gripper.get_actual_position()
+        if gripper_pos > cfg.fully_closed_threshold:
+            if getattr(gripper, "empty_at_fully_closed", False):
+                if grasped:
+                    logger.info(
+                        "Gripper %s: fully closed (pos=%.3f) — grasp rejected (%s)",
+                        arm_name,
+                        gripper_pos,
+                        grasped,
+                    )
+                else:
+                    logger.info(
+                        "Gripper %s: fully closed (pos=%.3f) — no object grasped",
+                        arm_name,
+                        gripper_pos,
+                    )
+                return None
+            elif not grasped:
                 logger.warning(
                     "Gripper %s: fully closed (pos=%.3f) with no contacts",
                     arm_name,
