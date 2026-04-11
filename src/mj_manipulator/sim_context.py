@@ -129,33 +129,38 @@ class SimArmController:
             self._run_close(candidates)
 
         # Record the grasp in bookkeeping (kinematic weld) and in the
-        # verifier (baseline capture + HOLDING state). The verifier's
-        # tick in the settling window is a no-op; real verification
-        # runs a few ticks later. If the grasp didn't actually succeed
-        # (signals don't support the baseline), the verifier will
-        # transition to LOST during the verification tick pump, and we
-        # undo the mark_grasped so downstream consumers see a clean
-        # failure.
+        # verifier (baseline capture + HOLDING state).
+        #
+        # The verifier enters HOLDING *inside its settling window* —
+        # drop-detection is suppressed for the first ``settling_ticks``
+        # ticks to give the actuator time to settle into its final
+        # grip configuration. Real verification runs on whatever the
+        # next physics cycle is, which is the next motion's
+        # ``ctx.execute`` call. For the BT path this is always a
+        # Sync/LiftBase that immediately runs through the event
+        # loop's normal tick pump, so the settling window elapses
+        # before any consumer reads ``is_held`` as authoritative.
+        #
+        # We deliberately do *not* pump extra physics ticks here to
+        # \"confirm\" the grasp synchronously: doing so blocks the
+        # caller thread and races with the event loop's own tick
+        # schedule, producing (a) visible lag in every downstream
+        # movement and (b) false positives when the verifier runs
+        # its first verification inside the actuator-integration
+        # transient that follows close_gripper. See the investigation
+        # recorded in the recycling-demo diagnostic run where
+        # empty-close → pos=1.000 but a healthy can-close → pos=0.46
+        # with perfectly stable post-settle readings — the readings
+        # themselves were fine, the synchronous tick pump was reading
+        # them during the transient settling window.
         if self._arm.grasp_manager is not None:
             self._arm.grasp_manager.mark_grasped(target, arm_name)
             self._arm.grasp_manager.attach_object(target, gripper.attachment_body)
 
         if gripper.grasp_verifier is not None:
             gripper.grasp_verifier.mark_grasped(target)
-            self._run_grasp_verification_ticks()
-            if not gripper.grasp_verifier.is_held:
-                logger.info("Grasp rejected by verifier: %s with %s arm", target, arm_name)
-                # Undo the bookkeeping — the grasp didn't actually hold.
-                if self._arm.grasp_manager is not None:
-                    self._arm.grasp_manager.mark_released(target)
-                    self._arm.grasp_manager.detach_object(target)
-                gripper.grasp_verifier.mark_released()
-                self._context.sync()
-                return None
-            logger.info("Grasped %s with %s arm (verifier confirmed)", target, arm_name)
-        else:
-            logger.info("Grasped %s with %s arm", target, arm_name)
 
+        logger.info("Grasped %s with %s arm", target, arm_name)
         self._context.sync()
         return target
 
@@ -167,26 +172,6 @@ class SimArmController:
             self._context._controller.close_gripper(arm_name, candidate_objects=candidates)
         else:
             gripper.kinematic_close()  # type: ignore[union-attr]
-
-    def _run_grasp_verification_ticks(self) -> None:
-        """Pump extra physics ticks so the verifier can exit its
-        settling window and run a real drop-detection check.
-
-        Runs ``settling_ticks + 2`` physics steps after
-        :meth:`GraspVerifier.mark_grasped` so the first post-settling
-        tick actually evaluates the signals against the baseline.
-        Otherwise ``grasp()`` would return while the verifier is
-        still in its warmup window, and downstream ``is_held`` reads
-        would be stale.
-        """
-        gripper = self._arm.gripper
-        if gripper is None or gripper.grasp_verifier is None:
-            return
-        if self._context._controller is None:
-            return  # kinematic sim — no physics ticks to run
-        n_ticks = gripper.grasp_verifier._params.settling_ticks + 2
-        for _ in range(n_ticks):
-            self._context._controller.step()
 
     def release(self, object_name: str | None = None) -> None:
         """Open gripper and release held object(s).
