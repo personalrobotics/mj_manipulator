@@ -172,6 +172,22 @@ def _pickup_details(ns: str) -> tuple[list[str], str | None, bool, bool, str | N
     return attempted, reached, not plan_failed, grasped, plan_reason
 
 
+def _grasp_was_rejected(robot, side: str) -> bool:
+    """Check if the GraspVerifier on this arm rejected a grasp attempt.
+
+    Returns True when the verifier's ``tracked_object`` is set (meaning
+    ``mark_grasped`` was called — the close sequence ran) but
+    ``is_held`` is False (meaning the verifier transitioned to LOST).
+    """
+    arm = robot.arms.get(side)
+    if arm is None or arm.gripper is None:
+        return False
+    v = arm.gripper.grasp_verifier
+    if v is None:
+        return False
+    return v.tracked_object is not None and not v.is_held
+
+
 def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) -> None:
     """Log detailed failure information after all arms have been tried."""
     all_attempted: set[str] = set()
@@ -182,7 +198,10 @@ def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) ->
         ns = f"/{side}"
         attempted, reached, planned, grasped, plan_reason = _pickup_details(ns)
         all_attempted.update(attempted)
-        if reached and planned and not grasped:
+        if reached and planned and _grasp_was_rejected(robot, side):
+            grasp_failures.append(f"{reached} ({side} arm)")
+            _set_hud_action(robot, side, "✗ pickup: grasp failed")
+        elif reached and planned and not grasped:
             grasp_failures.append(f"{reached} ({side} arm)")
             _set_hud_action(robot, side, "✗ pickup: grasp failed")
         elif reached and not planned:
@@ -194,7 +213,10 @@ def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) ->
             _set_hud_action(robot, side, f"✗ pickup: {short}")
 
     if grasp_failures:
-        logger.warning("Pickup failed: reached %s but grasp failed", ", ".join(grasp_failures))
+        logger.warning(
+            "Pickup failed: reached %s but grasp failed",
+            ", ".join(grasp_failures),
+        )
     elif plan_failures:
         logger.warning("Pickup failed: could not plan to %s", "; ".join(plan_failures))
     elif all_attempted:
