@@ -140,23 +140,30 @@ def _deactivate_teleop_for_arms(robot, arms: list[str] | None = None) -> None:
             ctx._deactivate_teleop_for(arm_name)
 
 
-def _pickup_details(ns: str) -> tuple[list[str], str | None, bool, bool, str | None]:
+def _pickup_details(ns: str) -> tuple[list[str], str | None, bool, bool | None, str | None]:
     """Read pickup results from blackboard after a failed attempt.
 
     Returns:
-        (attempted_objects, reached_object, plan_succeeded, grasp_succeeded,
-         plan_failure_reason)
+        ``(attempted_objects, reached_object, plan_succeeded,
+        grasp_confirmed, plan_failure_reason)``.
+
+        ``grasp_confirmed`` is ``None`` when the BT never got far
+        enough to check the verifier (e.g. plan failed before any
+        grasp was attempted), ``False`` when the grasp close ran but
+        the verifier then rejected it, and ``True`` when the grasp
+        held long enough for a downstream node (e.g. ``LiftBase``) to
+        confirm it.
     """
     attempted: list[str] = []
     reached: str | None = None
     plan_failed = False
-    grasped = False
+    grasp_confirmed: bool | None = None
     plan_reason: str | None = None
     try:
         bb = py_trees.blackboard.Client(name=f"pickup_report{ns}")
         bb.register_key(key=f"{ns}/tsr_to_object", access=Access.READ)
         bb.register_key(key=f"{ns}/object_name", access=Access.READ)
-        bb.register_key(key=f"{ns}/grasped", access=Access.READ)
+        bb.register_key(key=f"{ns}/grasp_confirmed", access=Access.READ)
         bb.register_key(key=f"{ns}/plan_failure_reason", access=Access.READ)
         mapping = bb.get(f"{ns}/tsr_to_object")
         if mapping:
@@ -166,10 +173,10 @@ def _pickup_details(ns: str) -> tuple[list[str], str | None, bool, bool, str | N
             reached = obj
         plan_reason = bb.get(f"{ns}/plan_failure_reason")
         plan_failed = plan_reason is not None
-        grasped = bool(bb.get(f"{ns}/grasped"))
+        grasp_confirmed = bb.get(f"{ns}/grasp_confirmed")
     except (KeyError, RuntimeError):
         pass
-    return attempted, reached, not plan_failed, grasped, plan_reason
+    return attempted, reached, not plan_failed, grasp_confirmed, plan_reason
 
 
 def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) -> None:
@@ -180,9 +187,10 @@ def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) ->
 
     for side in sides_tried:
         ns = f"/{side}"
-        attempted, reached, planned, grasped, plan_reason = _pickup_details(ns)
+        attempted, reached, planned, grasp_confirmed, plan_reason = _pickup_details(ns)
         all_attempted.update(attempted)
-        if reached and planned and not grasped:
+        if reached and planned and grasp_confirmed is False:
+            # Got to the object, grasp sequence ran, verifier rejected.
             grasp_failures.append(f"{reached} ({side} arm)")
             _set_hud_action(robot, side, "✗ pickup: grasp failed")
         elif reached and not planned:
@@ -194,7 +202,10 @@ def _report_pickup_failure(robot, sides_tried: list[str], target: str | None) ->
             _set_hud_action(robot, side, f"✗ pickup: {short}")
 
     if grasp_failures:
-        logger.warning("Pickup failed: reached %s but grasp failed", ", ".join(grasp_failures))
+        logger.warning(
+            "Pickup failed: reached %s but verifier rejected the grasp",
+            ", ".join(grasp_failures),
+        )
     elif plan_failures:
         logger.warning("Pickup failed: could not plan to %s", "; ".join(plan_failures))
     elif all_attempted:
@@ -226,6 +237,7 @@ def _setup_blackboard(robot, ctx, arm_name: str, arm, ns: str) -> None:
         f"{ns}/goal_tsr_index",
         f"{ns}/plan_failure_reason",
         f"{ns}/grasped",
+        f"{ns}/grasp_confirmed",
         f"{ns}/path",
         f"{ns}/trajectory",
         f"{ns}/twist",
@@ -267,6 +279,7 @@ def _setup_blackboard(robot, ctx, arm_name: str, arm, ns: str) -> None:
         "path",
         "trajectory",
         "grasped",
+        "grasp_confirmed",
         "grasp_tsrs",
         "place_tsrs",
         "tsr_to_object",
