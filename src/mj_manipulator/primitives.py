@@ -405,10 +405,13 @@ def _pickup_inner(robot, ctx, target, *, arm, verbose) -> bool:
         _set_hud_action(robot, side, f"✗ pickup({desc})")
         sides_tried.append(side)
 
-        # Stop if abort or this arm was preempted (e.g. teleop)
-        if robot.is_abort_requested() or _arm_preempted(robot, side):
+        # Stop if this arm was preempted (e.g. teleop took over)
+        if _arm_preempted(robot, side):
             _sync_viewer(robot)
             return False
+        # Clear abort from this arm's BT run (e.g. drop-detection
+        # abort) so the other arm gets a chance to try.
+        robot.clear_abort()
 
         # Before trying the next arm, send this arm home
         # so it doesn't block the workspace (skip if preempted)

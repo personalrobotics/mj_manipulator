@@ -371,3 +371,45 @@ class GraspSource(Protocol):
     def get_place_destinations(self, object_name: str) -> list[str]:
         """Get valid placement destinations for an object."""
         ...
+
+
+@runtime_checkable
+class PerceptionService(Protocol):
+    """On-demand perception of object poses in the scene.
+
+    Two methods: :meth:`refresh` observes the world, :meth:`get_pose`
+    returns the result. The implementation behind ``refresh`` can be
+    anything — a no-op (sim), a simple camera re-detect (hardware),
+    or a full tracker with persistent instance identity. The caller
+    doesn't know or care.
+
+    Call ``refresh()`` once before a planning cycle, then read poses
+    with ``get_pose()``. Don't call ``refresh()`` per-object — it
+    may be expensive (camera capture + detection + pose estimation).
+    """
+
+    def refresh(self) -> None:
+        """Observe the scene.
+
+        After this returns, ``get_pose`` reflects the current state
+        of the world. What "observe" means depends on the
+        implementation:
+
+        - **Sim**: no-op or ``mj_forward`` — physics state is truth.
+        - **Hardware (simple)**: trigger camera, detect objects,
+          assign fresh identities, write poses to the kinematic
+          twin via ``env.update()``.
+        - **Hardware (tracking)**: trigger camera, run
+          ``ObjectTracker.associate()`` to maintain persistent
+          identities across frames, write to kinematic twin.
+        """
+        ...
+
+    def get_pose(self, name: str) -> np.ndarray | None:
+        """Return 4×4 world-frame pose, or None if not visible/active.
+
+        Returns the result of the most recent ``refresh()``. For held
+        objects, implementations should return the FK+weld pose
+        (always available, not dependent on camera visibility).
+        """
+        ...
