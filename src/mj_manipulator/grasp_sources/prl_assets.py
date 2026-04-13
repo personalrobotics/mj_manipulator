@@ -55,12 +55,14 @@ class PrlAssetsGraspSource:
         grasp_manager: GraspManager,
         arms: dict[str, Arm],
         registry: object | None = None,
+        perception: object | None = None,
     ) -> None:
         self._model = model
         self._data = data
         self._gm = grasp_manager
         self._arms = arms
         self._registry = registry
+        self._perception = perception
 
     def get_grasps(self, object_name: str, hand_type: str) -> list:
         """Get grasp TSRs for an object from its prl_assets geometry."""
@@ -137,7 +139,16 @@ class PrlAssetsGraspSource:
             return True
 
     def _get_body_pose(self, body_name: str) -> np.ndarray:
-        """Get 4x4 world-frame pose of a MuJoCo body."""
+        """Get 4x4 world-frame pose of a MuJoCo body.
+
+        Uses the PerceptionService when available, falling back to
+        direct ``data.xpos`` reads for backward compatibility.
+        """
+        if self._perception is not None:
+            pose = self._perception.get_pose(body_name)
+            if pose is not None:
+                return pose
+            raise ValueError(f"Object not found or not active: {body_name}")
         bid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if bid < 0:
             raise ValueError(f"Body not found: {body_name}")

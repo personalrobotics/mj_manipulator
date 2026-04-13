@@ -37,6 +37,7 @@ from mj_manipulator.config import (
 from mj_manipulator.executor import KinematicExecutor, PhysicsExecutor
 from mj_manipulator.grasp_manager import GraspManager, detect_grasped_object
 from mj_manipulator.grippers import FrankaGripper, RobotiqGripper
+from mj_manipulator.perception import SimPerceptionService
 from mj_manipulator.physics_controller import ArmPhysicsExecutor, PhysicsController
 from mj_manipulator.planning import PlanResult
 from mj_manipulator.protocols import (
@@ -45,6 +46,7 @@ from mj_manipulator.protocols import (
     GraspSource,
     Gripper,
     IKSolver,
+    PerceptionService,
 )
 from mj_manipulator.robot import ManipulationRobot, RobotBase
 from mj_manipulator.sim_context import SimArmController, SimContext
@@ -61,6 +63,8 @@ __all__ = [
     "Gripper",
     "IKSolver",
     "GraspSource",
+    "PerceptionService",
+    "SimPerceptionService",
     # Trajectory
     "Trajectory",
     "create_linear_trajectory",

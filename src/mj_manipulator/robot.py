@@ -102,6 +102,7 @@ class RobotBase:
         grasp_manager: GraspManager,
         named_poses: dict[str, dict[str, list[float]]] | None = None,
         grasp_source: GraspSource | None = None,
+        perception: object | None = None,
     ):
         self.model = model
         self.data = data
@@ -109,6 +110,7 @@ class RobotBase:
         self.grasp_manager = grasp_manager
         self.named_poses = named_poses or {}
         self._grasp_source = grasp_source
+        self._perception = perception
         self._context = None
         self._abort_event = threading.Event()
 
@@ -205,15 +207,36 @@ class RobotBase:
                 return (arm_name, arm.gripper.held_object)
         return None
 
+    @property
+    def perception(self):
+        """Perception service for object pose queries."""
+        if self._perception is None:
+            from mj_manipulator.perception import SimPerceptionService
+
+            env = getattr(self, "_env", None)
+            if env is not None:
+                self._perception = SimPerceptionService(
+                    env,
+                    grasp_manager=self.grasp_manager,
+                )
+        return self._perception
+
     def get_object_pose(self, body_name):
-        """Get 4x4 world-frame pose of a MuJoCo body."""
+        """Get 4x4 world-frame pose of an object.
+
+        Uses the PerceptionService when available.
+        """
+        pose = self.perception.get_pose(body_name)
+        if pose is not None:
+            return pose
+        # Fallback: direct read for non-registry objects (fixtures, etc.)
         bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
         if bid < 0:
-            raise ValueError(f"Body not found: {body_name}")
-        pose = np.eye(4)
-        pose[:3, :3] = self.data.xmat[bid].reshape(3, 3)
-        pose[:3, 3] = self.data.xpos[bid]
-        return pose
+            raise ValueError(f"Object '{body_name}' not found in model")
+        T = np.eye(4)
+        T[:3, :3] = self.data.xmat[bid].reshape(3, 3)
+        T[:3, 3] = self.data.xpos[bid]
+        return T
 
     def forward(self):
         """Run mj_forward and sync viewer."""
