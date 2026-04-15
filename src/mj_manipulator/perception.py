@@ -66,14 +66,17 @@ class SimPerceptionService:
         self._am = asset_manager
         self._fixture_types = fixture_types or set()
 
-        # Create tracker if we have a registry. No seeding needed —
-        # refresh() uses hide_unlisted=True which clears stale objects
-        # and re-detects from scratch each call.
+        # Create tracker if we have a registry and mj_environment is
+        # available. CI environments that install mj_manipulator without
+        # mj_environment get a no-op refresh (graceful degradation).
         self._tracker = None
         if self._registry is not None:
-            from mj_environment.tracker import ObjectTracker
+            try:
+                from mj_environment.tracker import ObjectTracker
 
-            self._tracker = ObjectTracker(self._registry)
+                self._tracker = ObjectTracker(self._registry)
+            except ImportError:
+                pass
 
     def refresh(self) -> None:
         """Observe the scene and update the kinematic twin.
