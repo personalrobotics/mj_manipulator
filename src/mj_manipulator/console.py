@@ -103,12 +103,8 @@ def start_console(
         gui = viser_viewer._server.gui
 
         # E-Stop / Resume — above tabs so they're always visible
-        estop_btn = gui.add_button(
-            "E-Stop", color="red", icon=_viser.Icon.ALERT_OCTAGON
-        )
-        resume_btn = gui.add_button(
-            "Resume", color="green", icon=_viser.Icon.PLAYER_PLAY, visible=False
-        )
+        estop_btn = gui.add_button("E-Stop", color="red", icon=_viser.Icon.ALERT_OCTAGON)
+        resume_btn = gui.add_button("Resume", color="green", icon=_viser.Icon.PLAYER_PLAY, visible=False)
 
         @estop_btn.on_click
         def _on_estop(event):
