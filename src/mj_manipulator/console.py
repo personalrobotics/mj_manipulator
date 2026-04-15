@@ -207,8 +207,9 @@ def start_console(
         # -- IPython shell -----------------------------------------------------
         class _Prompts(Prompts):
             def in_prompt_tokens(self, cli=None):
+                stopped = " E-STOPPED" if robot.is_abort_requested() else ""
                 return [
-                    (Token.Prompt, f"{robot_name} [{mode}] [{self.shell.execution_count}]: "),
+                    (Token.Prompt, f"{robot_name} [{mode}]{stopped} [{self.shell.execution_count}]: "),
                 ]
 
             def out_prompt_tokens(self, cli=None):
