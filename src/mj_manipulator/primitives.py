@@ -115,8 +115,15 @@ def _sync_viewer(robot) -> None:
             pass
 
 
-def _arm_preempted(robot, arm_name: str) -> bool:
-    """Check if an arm was taken by another controller (e.g. teleop)."""
+def _arm_unavailable(robot, arm_name: str) -> bool:
+    """Check if an arm is unavailable for autonomous primitives.
+
+    Returns True when the arm is owned by a non-primitive controller
+    (teleop, gripper operation, or any future reason an arm might be
+    out of commission). Primitives should skip unavailable arms.
+    The check is live — when the controller releases the arm, it
+    becomes available again on the next call.
+    """
     ctx = getattr(robot, "_active_context", None)
     if ctx is None or not hasattr(ctx, "ownership") or ctx.ownership is None:
         return False
@@ -126,18 +133,8 @@ def _arm_preempted(robot, arm_name: str) -> bool:
     return kind not in (OwnerKind.IDLE, OwnerKind.TRAJECTORY)
 
 
-def _deactivate_teleop_for_arms(robot, arms: list[str] | None = None) -> None:
-    """Deactivate teleop on specified arms (or all) before a primitive."""
-    ctx = getattr(robot, "_active_context", None)
-    if ctx is None or not hasattr(ctx, "ownership") or ctx.ownership is None:
-        return
-    from mj_manipulator.ownership import OwnerKind
-
-    arm_names = arms if arms is not None else ctx.ownership.arm_names
-    for arm_name in arm_names:
-        kind, _ = ctx.ownership.owner_of(arm_name)
-        if kind == OwnerKind.TELEOP:
-            ctx._deactivate_teleop_for(arm_name)
+# Keep the old name as an alias for backward compatibility
+_arm_preempted = _arm_unavailable
 
 
 def _recover(robot, ctx, sides: list[str]) -> None:
@@ -345,8 +342,8 @@ def pickup(
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
-    robot.clear_abort()
-    _deactivate_teleop_for_arms(robot)
+    if robot.is_abort_requested():
+        return False
     try:
         return _pickup_inner(robot, ctx, target, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -356,8 +353,6 @@ def pickup(
             _set_hud_action(robot, side, "⊘ interrupted")
         _sync_viewer(robot)
         return False
-    finally:
-        robot.clear_abort()
 
 
 def _pickup_inner(robot, ctx, target, *, arm, verbose) -> bool:
@@ -386,6 +381,9 @@ def _pickup_inner(robot, ctx, target, *, arm, verbose) -> bool:
 
     sides_tried = []
     for i, side in enumerate(sides):
+        # Skip arms that are unavailable (teleop, out of commission, etc.)
+        if _arm_unavailable(robot, side):
+            continue
         arm_obj = robot.arms[side]
         ns = f"/{side}"
         _setup_blackboard(robot, ctx, side, arm_obj, ns)
@@ -405,17 +403,20 @@ def _pickup_inner(robot, ctx, target, *, arm, verbose) -> bool:
         _set_hud_action(robot, side, f"✗ pickup({desc})")
         sides_tried.append(side)
 
-        # Stop if this arm was preempted (e.g. teleop took over)
-        if _arm_preempted(robot, side):
-            _sync_viewer(robot)
-            return False
-        # Clear abort from this arm's BT run (e.g. drop-detection
-        # abort) so the other arm gets a chance to try.
-        robot.clear_abort()
+        # If the stop button was pressed, exit immediately
+        if robot.is_abort_requested():
+            break
+
+        # Clear per-arm abort (teleop preemption, drop detection)
+        # so the other arm can try. Don't clear the global abort
+        # (stop button) — that stays set.
+        ctx = getattr(robot, "_active_context", None)
+        if ctx is not None and ctx.ownership is not None:
+            ctx.ownership.clear_abort(side)
 
         # Before trying the next arm, send this arm home
-        # so it doesn't block the workspace (skip if preempted)
-        if i < len(sides) - 1 and not _arm_preempted(robot, side):
+        # so it doesn't block the workspace (skip if unavailable)
+        if i < len(sides) - 1 and not _arm_unavailable(robot, side):
             go_home(robot, arm=side)
 
     _report_pickup_failure(robot, sides_tried, target)
@@ -456,8 +457,8 @@ def place(
             logger.warning("Place failed: no arm is holding an object")
             return False
 
-    robot.clear_abort()
-    _deactivate_teleop_for_arms(robot)
+    if robot.is_abort_requested():
+        return False
     try:
         return _place_inner(robot, ctx, destination, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
@@ -466,8 +467,6 @@ def place(
         _set_hud_action(robot, arm, "⊘ interrupted")
         _sync_viewer(robot)
         return False
-    finally:
-        robot.clear_abort()
 
 
 def _place_inner(robot, ctx, destination, *, arm, verbose) -> bool:
@@ -525,17 +524,14 @@ def go_home(
     if ctx is None:
         raise RuntimeError("No active execution context. Use 'with robot.sim() as ctx:'")
 
-    robot.clear_abort()
-    arms_to_home = [arm] if arm is not None else list(robot.arms.keys())
-    _deactivate_teleop_for_arms(robot, arms_to_home)
+    if robot.is_abort_requested():
+        return False
     try:
         return _go_home_inner(robot, ctx, arm=arm, verbose=verbose)
     except KeyboardInterrupt:
         robot.request_abort()
         logger.warning("go_home interrupted by user")
         return False
-    finally:
-        robot.clear_abort()
 
 
 def _go_home_inner(robot, ctx, *, arm, verbose) -> bool:
@@ -553,6 +549,8 @@ def _go_home_inner(robot, ctx, *, arm, verbose) -> bool:
     for side in arms_to_home:
         if side not in ready_poses:
             continue
+        if _arm_preempted(robot, side):
+            continue  # arm unavailable (teleop, out of commission, etc.)
         arm_obj = robot.arms[side]
 
         def abort_fn(s=side):
