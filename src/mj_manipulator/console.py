@@ -60,12 +60,22 @@ def start_console(
     mode = "physics" if physics else "kinematic"
 
     # -- Build namespace -------------------------------------------------------
+    def stop():
+        """E-Stop: halt all execution. Call resume() to clear."""
+        robot.request_abort()
+
+    def resume():
+        """Clear E-Stop and allow execution again."""
+        robot.clear_abort()
+
     user_ns: dict = {
         "robot": robot,
         "np": np,
         "pickup": lambda target=None, **kw: pickup(robot, target, **kw),
         "place": lambda dest=None, **kw: place(robot, dest, **kw),
         "go_home": lambda **kw: go_home(robot, **kw),
+        "stop": stop,
+        "resume": resume,
     }
     if extra_ns:
         user_ns.update(extra_ns)
@@ -82,6 +92,8 @@ def start_console(
         f"  pickup('object')  — pick up an object\n"
         f"  place('dest')     — place held object\n"
         f"  go_home()         — return to ready\n"
+        f"  stop()            — E-Stop: halt everything\n"
+        f"  resume()          — clear E-Stop\n"
         f"  robot.<tab>       — tab completion\n"
     )
 
