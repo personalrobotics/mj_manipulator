@@ -63,40 +63,69 @@ _FRANKA_LOCKED_JOINT_INDEX = 4
 
 
 def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) -> None:
-    """Scale Franka gripper actuator to match real hardware grip force.
+    """Replace Franka gripper actuator with a **constant-force** grip.
 
-    The menagerie model's actuator8 under-produces grip force. The real
-    Franka hand grips at 140N (70N per finger). We scale both gain and
-    bias proportionally so the actuator reaches target_force at full close
-    while ctrl=255 can still hold the fingers open.
+    The menagerie model ships actuator8 as a *position-spring*
+    (``bias = bias[0] + bias[1] * length``), which means grip force
+    scales linearly with finger gap: full at 66 mm, halved at 33 mm,
+    tiny when fingers are almost closed. That's the opposite of how
+    the real Franka hand behaves (constant force regardless of gap)
+    and the reason cans slip out during transport — any inertial
+    perturbation that closes the fingers slightly *reduces* grip, so
+    the slip feeds on itself until the object falls.
+
+    Two menagerie defaults also fight the target_force setting:
+
+    1. ``forcerange`` is ``[-100, 100]`` N → any bias beyond that is
+       clamped, so the previous position-spring "140N" fix actually
+       delivered 100N max.
+    2. ``biasprm[1]`` couples force to finger position.
+
+    This helper rewrites the actuator so that:
+
+    - ``ctrl = 0``   → net force = ``-target_force``  (closing, constant)
+    - ``ctrl = 255`` → net force = ``+target_force``  (opening, constant)
+    - Force is independent of gap (``biasprm[1]`` set to 0)
+    - ``forcerange`` is expanded to fit, so nothing gets clamped
 
     Args:
         model: Compiled MjModel (modified in place).
         target_force: Desired grip force at full close [N]. Default 140N
-            from the Franka Emika datasheet.
+            from the Franka Emika datasheet (70 N per finger).
     """
     aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
     if aid < 0:
         return
 
-    # Actuator force model: force = gain * ctrl + bias[1] * length + bias[2] * velocity
-    # To grip at target_force when ctrl=0 and grasping a typical object:
-    #   target_force = |bias[1]| * length_grasp
-    # To hold open when ctrl=255:
-    #   gain * 255 = |bias[1]| * length_open  (zero net force)
-    length_open = 0.08  # 2 × finger_joint open position (0.04m each)
-    length_grasp = 0.066  # typical grasp (e.g., soda can r=33mm)
+    # Affine actuator force model:
+    #   force = gain[0] * ctrl + bias[0] + bias[1] * length + bias[2] * vel
+    #
+    # For constant force, we set bias[1] = 0. We want a linear map
+    # from ctrl ∈ [0, 255] to force ∈ [-target, +target]:
+    #   force(ctrl) = gain * ctrl + bias[0]
+    #   force(0)   = bias[0]          = -target   → bias[0] = -target
+    #   force(255) = 255*gain + bias[0] = +target → gain = 2*target / 255
+    new_bias0 = -target_force
+    new_gain = 2.0 * target_force / 255.0
 
-    new_bias1 = -target_force / length_grasp
-    new_gain = abs(new_bias1) * length_open / 255.0
-
-    # Scale damping proportionally to bias spring
+    # Keep damping (bias[2]) proportional to the grip force change — it
+    # stabilizes the finger motion against its own inertia. Scale from
+    # the old bias[1] magnitude to preserve the damper's ratio.
     old_bias1 = model.actuator_biasprm[aid, 1]
-    scale = new_bias1 / old_bias1 if old_bias1 != 0 else 1.0
+    old_bias2 = model.actuator_biasprm[aid, 2]
+    damping_scale = abs(new_bias0 / old_bias1) if old_bias1 != 0 else 1.0
 
-    model.actuator_biasprm[aid, 1] = new_bias1
-    model.actuator_biasprm[aid, 2] *= scale
+    model.actuator_biasprm[aid, 0] = new_bias0
+    model.actuator_biasprm[aid, 1] = 0.0  # kill position coupling
+    model.actuator_biasprm[aid, 2] = old_bias2 * damping_scale
     model.actuator_gainprm[aid, 0] = new_gain
+
+    # Expand force range so the clamp doesn't strangle the bias. Add a
+    # bit of headroom for the damper term during fast finger motion.
+    headroom = 1.25
+    limit = target_force * headroom
+    model.actuator_forcerange[aid, 0] = -limit
+    model.actuator_forcerange[aid, 1] = +limit
 
 
 def add_franka_ee_site(
