@@ -387,11 +387,187 @@ _ROBOTS = {
 
 If you attach a menagerie gripper and it drops objects during transit, check:
 
-- **Position-spring vs constant-force actuator**: many menagerie grippers ship as position-springs where grip force weakens as fingers close (a real problem for compliant objects). See `fix_franka_grip_force` in `arms/franka.py` for how to rewrite the actuator.
+- **Position-spring vs constant-force actuator**: many menagerie grippers ship as position-springs where grip force weakens as fingers close (a real problem for compliant objects). See `fix_franka_grip_force` in `arms/franka.py` and `fix_robotiq_grip_force` in `grippers/robotiq.py` for how to rewrite the actuator.
 - **Finger self-collision**: menagerie grippers often let the fingers interpenetrate on empty close, which breaks motion planning ("start in collision"). Exclude the finger↔finger pair via `spec.add_exclude()`. See `add_franka_finger_exclude` for the pattern.
 - **Pad friction**: raise sliding friction to ~1.5 and torsional to ~0.05. See `add_franka_pad_friction`.
 
-The grip sweep harness at `tests/grip_sweep.py` is a useful tool for tuning these parameters against a specific object set.
+For adding a new gripper from scratch, see the next section.
+
+## Adding a New Gripper
+
+`grippers/franka.py` (integrated hand) and `grippers/robotiq.py` (attached 2F-85 or 2F-140) are the complete references. The iiwa 14 demo (`demos/iiwa14_setup.py`) shows how to attach a menagerie gripper to a bare arm via `MjSpec`. This section documents the full workflow the way we walked it for the 2F-85, including what goes wrong and how to diagnose it.
+
+### The TSR frame convention (read this first)
+
+Every parallel-jaw grasp in this codebase is computed relative to a canonical **ee_site** frame:
+
+- **z** = approach direction (points from palm toward object)
+- **y** = finger-opening axis (direction fingers separate)
+- **x** = palm normal (right-hand rule: x = y × z)
+
+The TSR library's `ParallelJawGripper.grasp_cylinder_side` / `grasp_box_face_*` / etc. generate poses where the ee_site sits at the **palm**, with **fingers extending forward by `FINGER_LENGTH`**. The critical assumption is that *everything on the gripper except the fingers is behind the palm* — if part of the housing extends past the palm along the approach axis, TSR grasps will try to drive the housing into the object.
+
+If the gripper's XML doesn't have a site at the palm with this orientation, you add one via `MjSpec` before compiling.
+
+### Step 0 — gather constants from the XML
+
+Open the gripper's MuJoCo XML and note:
+
+- **Mounting body name** — the root of the gripper's kinematic tree, the body where `spec.attach(...)` will graft it on. For a Robotiq, this is `base_mount`. For the Franka hand, it's `hand`.
+- **Actuator name** and its `forcerange` / `gainprm` / `biasprm`. Menagerie grippers are often position actuators with a bias that couples grip force to finger gap — see Step 5 for the fix.
+- **Joint names** for the finger mechanism (driver, coupler, follower, spring_link on Robotiq; finger_joint1/2 on Franka) and their ranges. Note whether qpos=0 is fully open or fully closed.
+- **Pad/fingertip collision geoms** — where contact with the object happens.
+
+### Step 1 — visualize + measure the gripper
+
+Before writing any code, eyeball the gripper geometry against a test object:
+
+```bash
+uv run python scripts/visualize_grasps.py --gripper <name> --object can
+```
+
+You'll need to register the gripper in `scripts/visualize_grasps.py`'s `GRIPPERS` dict first. Start with a reasonable guess for `grasp_site_pos` / `grasp_site_quat` / `hand_type`. The viz teleports a bare gripper through TSR-sampled pre-grasp poses — you can see immediately whether the palm is at the right radial distance, whether fingers straddle the object, and (via the Collision panel) whether the housing intrudes on the object.
+
+Then automate the check:
+
+```bash
+uv run python scripts/validate_gripper.py --gripper <name>
+```
+
+`validate_gripper.py` walks each collision geom's AABB along the approach axis, runs a deterministic 50-samples × N-templates sweep, and prints specific diagnostic messages when something's off ("housing extends 94 mm past grasp_site — move grasp_site forward by that amount").
+
+### Step 2 — create a TSR `ParallelJawGripper` subclass
+
+Add a class to `tsr/src/tsr/hands/parallel_jaw.py`:
+
+```python
+class MyGripper(ParallelJawGripper):
+    """One-line description with the XML source."""
+
+    FINGER_LENGTH = 0.059   # meters, palm → fingertip pad center
+    MAX_APERTURE = 0.085    # meters, pad INNER face ↔ inner face at full open
+
+    # Distance from the gripper's mounting-body origin to the TSR palm
+    # along the approach axis. Callers placing a grasp_site in an
+    # MjSpec should offset it by this value so the arm's ee_site lands
+    # on the TSR palm, not inside the housing.
+    PALM_OFFSET_FROM_MOUNT = 0.094
+
+    def __init__(self):
+        super().__init__(
+            finger_length=self.FINGER_LENGTH,
+            max_aperture=self.MAX_APERTURE,
+        )
+```
+
+Critical details drawn from the 2F-85 experience:
+
+- **`FINGER_LENGTH`** is palm-to-fingertip, where "palm" = the forward-most point of the *non-finger* structure. **Not** the distance from the mounting plate to the fingertip. If the gripper has a chunky housing, FL does not include the housing depth.
+- **`MAX_APERTURE`** is the **inner-face** gap when fully open (i.e., the widest object that fits *between* the pads), not the outer-face distance. Using the outer distance silently allows TSR to propose grasps for objects that won't actually fit.
+- **`PALM_OFFSET_FROM_MOUNT`** is a new constant we use to record the shift between the gripper's XML root (`base_mount`, `hand`, etc.) and the TSR palm. Callers read this when placing `grasp_site` so the value only lives in one place.
+
+Register the class in `tsr/src/tsr/hands/__init__.py` and `tsr/src/tsr/hands/registry.py`.
+
+Then extend `_get_hand` in `mj_manipulator/src/mj_manipulator/grasp_sources/prl_assets.py` so a `hand_type` string resolves to your class.
+
+### Step 3 — place `grasp_site` in MjSpec
+
+In your setup module (e.g. `demos/my_robot_setup.py`), after loading the gripper spec but before attaching it, add a `grasp_site` at `mounting_body + PALM_OFFSET_FROM_MOUNT` along the approach axis, oriented to match the TSR convention.
+
+```python
+from tsr.hands import MyGripper
+
+gripper_spec = mujoco.MjSpec.from_file(str(gripper_xml))
+base = gripper_spec.body("base_mount")   # or "hand", etc.
+site = base.add_site()
+site.name = "grasp_site"
+site.pos = [0.0, 0.0, MyGripper.PALM_OFFSET_FROM_MOUNT]
+site.quat = [0.7071, 0.0, 0.0, -0.7071]   # -90° about z for Robotiq-style
+```
+
+The rotation depends on the gripper's internal frame. Robotiq-family grippers in the menagerie have their fingers opening along the *x*-axis of `base_mount` — the −90° z-rotation maps TSR's expected +y opening axis to the gripper's actual +x. Franka's hand body already has z=approach, y=opening, so it needs identity rotation. When in doubt, open the viz (Step 1) — if the fingers don't visibly open along the "finger-opening" axis you expect, fix the rotation.
+
+### Step 4 — gripper class + kinematic trajectory
+
+For a Robotiq variant (2F-85 or similar), reuse the existing `RobotiqGripper` class and supply a variant-specific kinematic trajectory:
+
+```bash
+uv run python scripts/record_gripper_trajectory.py \
+    --gripper-xml path/to/your_gripper.xml \
+    --actuator-name fingers_actuator \
+    --ctrl-open 0 --ctrl-closed 255 \
+    --joints left_driver_joint right_driver_joint ...
+```
+
+Paste the resulting array into `mj_manipulator/src/mj_manipulator/grippers/_<variant>_trajectory.py` and pass it to `RobotiqGripper(..., trajectory=..., hand_type_override="<your_hand_type>")`.
+
+For a non-Robotiq parallel jaw, subclass `_BaseGripper` and implement the gripper protocol. See `grippers/franka.py` for the shape.
+
+### Step 5 — fix the grip force
+
+Most menagerie grippers ship with a position actuator whose generalized force couples to finger gap:
+
+```
+force = gain[0] * ctrl + bias[0] + bias[1] * length + bias[2] * vel
+```
+
+For both the 2F-85 and the Franka hand in menagerie, `bias[1]` is large and negative, which means grip force → 0 exactly when the fingers reach the closed stop. If an object slips through, the gripper relaxes instead of re-closing. Symptoms: objects drop during transport, or empty-close states never settle.
+
+The fix rewrites the actuator to produce a constant force:
+
+- **Robotiq**: `fix_robotiq_grip_force(model, prefix="gripper/", target_tendon_force=15.0)`  
+  Default 15 N tendon yields ~200–300 N pad force on the 2F-85 (middle of the real Robotiq 20–235 N spec).
+- **Franka**: `fix_franka_grip_force(model, target_force=70.0)`  
+  Default 70 N is the low end of the Franka Emika continuous-grip spec.
+
+Call these *after* compilation (they mutate the compiled `MjModel`) and *before* the `Gripper` class is instantiated.
+
+Benchmark harness: `/tmp/grip_force_bench.py` template — apply target force, step physics with a test cylinder between the pads, read `data.contact[].normal` force. Useful for tuning against a specific object set.
+
+### Step 6 — pad friction and self-collision
+
+Two more menagerie quirks that bite in practice:
+
+- **Self-colliding fingers**: menagerie grippers often let the pads interpenetrate on empty close. The planner then reports "start in collision" for any empty-close state. Exclude the pair before compile:
+
+  ```python
+  exclude = spec.add_exclude()
+  exclude.bodyname1 = "gripper/left_pad"     # or "gripper/left_finger"
+  exclude.bodyname2 = "gripper/right_pad"
+  ```
+
+- **Pad friction**: rigid-body contact on a thin pad against a cylinder is nearly line contact — low friction means objects slide out easily even at high grip force. Bump sliding friction on pad collision geoms to ~1.5 (silicone-on-aluminum range) and torsional friction to ~0.05. See `add_franka_pad_friction` for the Franka recipe; a `add_robotiq_pad_friction` helper hasn't been written yet but would follow the same structure.
+
+### Step 7 — validate
+
+Re-run the validator:
+
+```bash
+uv run python scripts/validate_gripper.py --gripper <name>
+```
+
+It should print `RESULT: PASS ✓` — 0/300 grasps in collision, declared `FINGER_LENGTH` within ~1 mm of the measured pad tip, declared `MAX_APERTURE` within ~1 mm of the measured inner-face gap.
+
+Also run the integration-level smoke test: in your setup module's scenario, pick up one object, move it to the drop destination, release, repeat a few times. The `GraspVerifier` will emit a `LOST` warning if any grasp slips — that's the ultimate "did we get the grip force/friction right" signal.
+
+### Common failure modes
+
+| Symptom | Likely cause | Where to look |
+|---|---|---|
+| Arm stops ~1–2 cm short of grasp target | FL too small, or ee_site at fingertip instead of palm | `visualize_grasps.py`, check grasp_site position |
+| Housing penetrates object on mid/deep grasps | grasp_site inside the housing | `validate_gripper.py` flags this with a "move grasp_site forward" suggestion |
+| Fingers don't close in kinematic mode | Wrong trajectory table (signs flipped for this variant) | Re-record with `record_gripper_trajectory.py` |
+| Object drops during transport | Grip force too low OR empty-close bug | `fix_*_grip_force` helper |
+| Planner reports "start in collision" after empty close | Fingers interpenetrating at close stop | `spec.add_exclude()` for finger↔finger |
+| Object slips out under lateral acceleration | Pad friction too low | `add_franka_pad_friction`-style helper |
+| `GraspVerifier` flips to LOST during transport | Load-signal baseline wrong, OR object really is slipping | Enable DEBUG logging on verifier; check baseline readings at `mark_grasped` |
+
+### The tools, summarized
+
+- **`scripts/visualize_grasps.py`** — interactive web viewer. Teleports a bare gripper through TSR-sampled poses; per-template collision indicator. Use first when eyeballing a new gripper.
+- **`scripts/validate_gripper.py`** — deterministic 50-samples × N-templates collision sweep + AABB measurement. Automated pass/fail with specific diagnostic messages. Use after each geometry change; suitable for CI.
+- **`scripts/record_gripper_trajectory.py`** — records the joint-qpos trajectory of an open→close physics rollout. Used to build the kinematic trajectory table that `RobotiqGripper` replays in no-physics mode.
+- **`fix_*_grip_force` helpers** — rewrite the gripper actuator to produce a constant force independent of finger gap. One helper per gripper family (`fix_franka_grip_force` in `arms/franka.py`, `fix_robotiq_grip_force` in `grippers/robotiq.py`).
 
 ## Behavior Trees
 
@@ -465,6 +641,34 @@ Short examples of individual APIs, at `demos/` in the repo root:
 uv run python demos/ik_solver.py         # EAIK analytical IK
 uv run python demos/arm_planning.py      # CBiRRT motion planning
 uv run python demos/collision_check.py   # Collision checking modes
+```
+
+### Debug and study scripts
+
+Diagnostic tools at `scripts/`:
+
+```bash
+# Teleport a bare gripper through TSR-sampled grasps for eyeballing —
+# no arm, no IK, no collision checking. Fastest way to diagnose
+# "gripper stops short" or "FINGER_LENGTH feels wrong".
+uv run python scripts/visualize_grasps.py --gripper robotiq_2f85 --object can
+uv run python scripts/visualize_grasps.py --gripper franka        --object spam_can
+
+# Auto-test a gripper's TSR setup: runs a collision sweep (50 samples ×
+# every template) and prints the per-template pass/fail rate. When a
+# check fails, prints a concrete fix (grasp_site offset, FINGER_LENGTH
+# value). Run after registering a new gripper, or in CI.
+uv run python scripts/validate_gripper.py --gripper robotiq_2f85
+uv run python scripts/validate_gripper.py --all
+
+# Measure commanded-vs-actual joint tracking during a representative
+# motion. Reports RMS/max error, peak lag, settling time.
+uv run python scripts/trajectory_tracking_study.py --robot franka
+uv run python scripts/trajectory_tracking_study.py --robot iiwa14
+
+# Record a kinematic open→close joint trajectory for a new gripper.
+# Paste the output into grippers/_robotiq_Xxx_trajectory.py.
+uv run python scripts/record_gripper_trajectory.py --help
 ```
 
 ## Building Your Own Demo
