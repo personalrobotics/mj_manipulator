@@ -273,11 +273,15 @@ def detect_grasped_object(
     if not object_contacts:
         return None
 
-    # Filter by bilateral contact requirement
+    # Filter by bilateral contact requirement. This heuristic is
+    # sim-only: it's used by the nameless grasp fallback (REPL / teleop
+    # "close the gripper on whatever is there"). The BT / primitives
+    # path always passes an explicit object name and uses GraspVerifier
+    # for post-grasp validation. On hardware, the nameless path is
+    # identified by PerceptionService after gripper close.
     non_empty_groups = [g for g, ids in group_body_ids.items() if ids]
     if require_bilateral and len(non_empty_groups) < 2:
         # Finger group inference failed — fall back to any-contact detection.
-        # TODO(#80): replace bilateral heuristic with physics/sensor-based verification.
         pass
     if require_bilateral and len(non_empty_groups) >= 2:
         bilateral = {

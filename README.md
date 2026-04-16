@@ -117,16 +117,13 @@ See [docs/cartesian-control.md](docs/cartesian-control.md) for the full derivati
 During manipulation, a grasped object must be treated as part of the robot: gripper-to-object contacts are expected, but arm-to-object and object-to-environment contacts indicate a collision. `CollisionChecker` handles this with software contact filtering — no MuJoCo collision group changes needed.
 
 ```python
-from mj_manipulator.collision import CollisionChecker
-from mj_manipulator.grasp_manager import GraspManager, detect_grasped_object
+from mj_manipulator import CollisionChecker, GraspManager
 
 grasp_manager = GraspManager(model, data)
 
-# After closing gripper:
-grasped = detect_grasped_object(model, data, gripper_body_names, candidate_objects=["can_0"])
-if grasped:
-    grasp_manager.mark_grasped(grasped, arm="right")
-    grasp_manager.attach_object(grasped, "gripper/right_pad")
+# After closing the gripper on a target (normal flow uses ctx.arm().grasp()):
+grasp_manager.mark_grasped("can_0", arm="right")
+grasp_manager.attach_object("can_0", "gripper/right_pad")
 
 # Collision checker uses grasp state automatically:
 checker = CollisionChecker(model, data, joint_names, grasp_manager=grasp_manager)

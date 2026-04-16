@@ -198,6 +198,82 @@ class RobotBase:
 
         return go_home(self, **kwargs)
 
+    # -- Scenario hooks --------------------------------------------------------
+
+    def get_worktop_pose(self):
+        """Return the worktop surface as a :class:`WorktopPose`.
+
+        The worktop is the rectangular surface on which the scenario
+        system scatters objects. Subclasses should override this to
+        expose whatever surface is appropriate for the robot — a site
+        named "worktop" in the model, a plate body, etc.
+
+        Raises:
+            NotImplementedError: If the subclass does not provide a
+                worktop. In that case, scenarios that scatter objects
+                will fail with a clear error.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not define a worktop. Override "
+            "get_worktop_pose() to expose a placement surface."
+        )
+
+    def setup_scenario_scene(self, scene: dict) -> None:
+        """Apply a scenario's scene dict to this robot.
+
+        Activates fixtures at their specified poses, moves arms to
+        "ready" (if the pose is defined), and scatters graspable
+        objects on the worktop.
+
+        Subclasses can override to add robot-specific steps (e.g.
+        setting a VentionBase height, telling a perception service
+        which types are fixtures).
+
+        Args:
+            scene: Dict with optional keys ``objects``, ``fixtures``,
+                ``spawn_count``. See :mod:`mj_manipulator.scenarios`.
+        """
+        from mj_manipulator.scenarios.spawn import scatter_on_surface
+
+        fixtures = scene.get("fixtures") or {}
+        objects = scene.get("objects") or {}
+        spawn_count = scene.get("spawn_count")
+
+        # 1. Activate fixtures at their specified positions.
+        env = getattr(self, "_env", None)
+        if env is not None and env.registry is not None:
+            for obj_type, positions in fixtures.items():
+                for pos in positions:
+                    env.registry.activate(obj_type, pos=list(pos))
+
+        # 2. Move arms to "ready" if defined.
+        ready = self.named_poses.get("ready", {})
+        for arm_name, arm in self.arms.items():
+            if arm_name in ready:
+                q = ready[arm_name]
+                for i, idx in enumerate(arm.joint_qpos_indices):
+                    self.data.qpos[idx] = q[i]
+
+        mujoco.mj_forward(self.model, self.data)
+
+        # 3. Scatter graspable objects on the worktop.
+        if env is not None and env.registry is not None and objects:
+            try:
+                worktop = self.get_worktop_pose()
+            except NotImplementedError:
+                logger.warning(
+                    "%s.setup_scenario_scene: no worktop; skipping object scatter",
+                    type(self).__name__,
+                )
+                return
+            scatter_on_surface(
+                env,
+                objects,
+                set(fixtures.keys()),
+                worktop=worktop,
+                spawn_count=spawn_count,
+            )
+
     # -- Scene queries ---------------------------------------------------------
 
     def find_objects(self, target=None):

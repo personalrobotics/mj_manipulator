@@ -1,25 +1,58 @@
 # Demos
 
-Integration demos using real MuJoCo robot models (UR5e, Franka Panda).
+Runnable demos for mj_manipulator. The capstone is the **recycling
+scenario**; the other scripts are short references for individual APIs.
 
-Unlike `tests/` (which are automated, mock-based, CI-friendly), these are
-standalone scripts that load real models and show the framework working
-end-to-end.
-
-## Running
+## Quick start
 
 ```bash
-cd mj_manipulator
-uv run python demos/<script>.py
+# Launch the scenario picker (lists everything and prompts)
+python -m mj_manipulator
+
+# Run the recycling scenario directly
+python -m mj_manipulator --scenario recycling
+
+# Headless (no browser viewer)
+python -m mj_manipulator --scenario recycling --no-viser
+
+# Kinematic mode (no physics stepping)
+python -m mj_manipulator --scenario recycling --no-physics
 ```
 
-## Available Demos
+The top-level `demos/recycling.py` is a thin shim; `python -m mj_manipulator`
+is the canonical entry point.
+
+## How the capstone demo is organized
+
+Scenarios are Python modules with a `scene = {...}` dict and optional
+user-facing functions. The framework handles discovery, loading, and
+wiring. To see what that looks like:
+
+| File | What it does |
+|---|---|
+| [`../src/mj_manipulator/demos/recycling.py`](../src/mj_manipulator/demos/recycling.py) | The scenario file — `scene` dict + `sort_all(robot)` function |
+| [`../src/mj_manipulator/demos/franka_setup.py`](../src/mj_manipulator/demos/franka_setup.py) | Franka-specific robot assembly. Read end-to-end to see what it takes to bring your own arm into the framework |
+| [`../src/mj_manipulator/scenarios/`](../src/mj_manipulator/scenarios/) | The scenario system itself — loader, runner, spawn |
+| [`../src/mj_manipulator/cli.py`](../src/mj_manipulator/cli.py) | Glue that wires scenarios + robot + console |
+
+To bring your own arm, copy `franka_setup.py` and swap the arm factory,
+gripper, home pose, and worktop. To write your own scenario, drop a
+`my_scene.py` into `src/mj_manipulator/demos/` with a `scene` dict and
+your user-facing functions.
+
+## Reference scripts
+
+Short examples of individual APIs. Each exercises one subsystem.
 
 | Script | What it shows |
 |---|---|
-| `recycling.py` | **Capstone demo** — full stack integration: prl_assets models, AssetManager-driven TSR grasping, MjSpec scene composition, GraspManager, SimContext. UR5e + Franka each recycle 3 soda cans into a bin. |
-| `ik_solver.py` | EAIK analytical IK: kinematic extraction from MuJoCo, multi-config IK with solution analysis, FK round-trip verification |
-| `arm_planning.py` | Motion planning with CBiRRT: plan to configuration, plan to pose (via TSRs), trajectory retiming with TOPP-RA |
-| `collision_check.py` | Collision checking: simple mode, grasp-aware mode, batch configuration validation |
-| `cartesian_control.py` | CartesianController: teleop via step() at 125 Hz, scripted move() with distance limit, move_to() pose targeting; internal Jacobian and QP solver table |
-| `sim_context.py` | SimContext execution layer: batch trajectory execution, streaming joint control, streaming cartesian control — physics and kinematic modes |
+| [`ik_solver.py`](ik_solver.py) | EAIK analytical IK: kinematic extraction, multi-config solve, FK round-trip |
+| [`arm_planning.py`](arm_planning.py) | CBiRRT motion planning: plan to configuration, plan to pose via TSRs, TOPP-RA retiming |
+| [`collision_check.py`](collision_check.py) | CollisionChecker: simple mode, grasp-aware mode, batch validation |
+
+```bash
+uv run mjpython demos/<script>.py
+```
+
+Use `mjpython` (not plain `python`) on macOS so the viser viewer can
+render — it's MuJoCo's main-thread launcher.
