@@ -178,6 +178,96 @@ _2F140_TRAJECTORY = np.array(
 
 
 # ---------------------------------------------------------------------------
+# Grip-force fix
+# ---------------------------------------------------------------------------
+
+
+def fix_robotiq_grip_force(
+    model: mujoco.MjModel,
+    *,
+    prefix: str = "",
+    target_tendon_force: float = 15.0,
+    actuator_name: str = "fingers_actuator",
+) -> None:
+    """Replace the Robotiq gripper actuator with a **constant-force** grip.
+
+    Both menagerie 2F-85 and geodude_assets 2F-140 ship the same buggy
+    actuator: a position actuator whose generalized force couples
+    linearly to *tendon length*:
+
+        force = gain[0] * ctrl + bias[0] + bias[1] * length + bias[2] * vel
+              = 0.3137 * ctrl + 0 + (-100) * length + (-10) * vel
+
+    With ``ctrl=255`` (close command) and the tendon fully extended
+    (``length=0.8`` at fully-closed):
+
+        force = 80 - 80 = 0
+
+    i.e. **grip force vanishes exactly when the fingers are fully
+    closed**. If the object ever slips through the jaws, the gripper
+    relaxes instead of trying to re-close — the same pathology the
+    Franka hand had, fixed by :func:`fix_franka_grip_force`.
+
+    Additionally, the menagerie ``forcerange="-5 5"`` clamps peak tendon
+    force to 5 N. On the 2F-85 that works out to roughly 70 N of pad
+    force (low end of the real Robotiq 20–235 N spec). For heavier or
+    smoother objects, that's not enough — cans slip during transport
+    when the arm accelerates.
+
+    This helper rewrites ``actuator_name`` so:
+
+    - ``ctrl = 0``   → tendon force = ``-target_tendon_force`` (open)
+    - ``ctrl = 255`` → tendon force = ``+target_tendon_force`` (close)
+    - Force is independent of tendon length (``biasprm[1] = 0``)
+    - ``forcerange`` widens to ``±(target_tendon_force + small margin)``
+
+    The ``bias[2]`` velocity-damping term is preserved (scaled to the
+    new bias magnitude) to keep the finger linkage stable against its
+    own inertia.
+
+    Args:
+        model: Compiled MjModel (modified in place).
+        prefix: Actuator-name prefix. Use ``"gripper/"`` if the gripper
+            was attached via ``spec.attach(gripper_spec, prefix="gripper/")``.
+        target_tendon_force: Peak tendon force [N] at full close.
+            Default 15 N — roughly 3× the menagerie default, yielding
+            ~200 N pad force on the 2F-85 (middle of the real Robotiq
+            spec). Scale down to 5 N for delicate objects, up to 25 N
+            for heavy objects.
+        actuator_name: Actuator to fix (default ``"fingers_actuator"``,
+            which is the name used by both menagerie 2F-85 and
+            geodude_assets 2F-140).
+    """
+    aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, prefix + actuator_name)
+    if aid < 0:
+        raise RuntimeError(
+            f"fix_robotiq_grip_force: no actuator named {prefix + actuator_name!r} in this model."
+        )
+
+    # Affine force model: force = gain[0]*ctrl + bias[0] + bias[1]*length + bias[2]*vel
+    #   force(0)   = bias[0]        = -target  →  bias[0] = -target
+    #   force(255) = 255*gain + bias[0] = +target → gain = 2*target/255
+    new_bias0 = -target_tendon_force
+    new_gain = 2.0 * target_tendon_force / 255.0
+
+    # Preserve damping ratio — scale by the magnitude change in bias[0].
+    old_bias1 = model.actuator_biasprm[aid, 1]
+    old_bias2 = model.actuator_biasprm[aid, 2]
+    damping_scale = abs(new_bias0 / old_bias1) if old_bias1 != 0 else 1.0
+
+    model.actuator_biasprm[aid, 0] = new_bias0
+    model.actuator_biasprm[aid, 1] = 0.0  # kill length coupling
+    model.actuator_biasprm[aid, 2] = old_bias2 * damping_scale
+    model.actuator_gainprm[aid, 0] = new_gain
+
+    # Widen forcerange to let the actuator actually produce target_tendon_force.
+    # Add 20 % margin so transient velocity-damping spikes don't hit the clamp.
+    margin = 1.2
+    model.actuator_forcerange[aid, 0] = -target_tendon_force * margin
+    model.actuator_forcerange[aid, 1] = +target_tendon_force * margin
+
+
+# ---------------------------------------------------------------------------
 # RobotiqGripper
 # ---------------------------------------------------------------------------
 
