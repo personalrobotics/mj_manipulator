@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import mujoco
 import numpy as np
@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@runtime_checkable
 class Executor(Protocol):
     """Protocol for trajectory execution."""
 

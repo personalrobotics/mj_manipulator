@@ -23,6 +23,7 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import mujoco
@@ -31,6 +32,8 @@ import numpy as np
 from mj_manipulator.arm import Arm
 from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
 from mj_manipulator.config import ArmConfig, KinematicLimits
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from mj_environment import Environment
@@ -62,40 +65,72 @@ _FRANKA_LOCKED_JOINT_INDEX = 4
 # ---------------------------------------------------------------------------
 
 
-def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) -> None:
-    """Scale Franka gripper actuator to match real hardware grip force.
+def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 70.0) -> None:
+    """Replace Franka gripper actuator with a **constant-force** grip.
 
-    The menagerie model's actuator8 under-produces grip force. The real
-    Franka hand grips at 140N (70N per finger). We scale both gain and
-    bias proportionally so the actuator reaches target_force at full close
-    while ctrl=255 can still hold the fingers open.
+    The menagerie model ships actuator8 as a *position-spring*
+    (``bias = bias[0] + bias[1] * length``), which means grip force
+    scales linearly with finger gap: full at 66 mm, halved at 33 mm,
+    tiny when fingers are almost closed. That's the opposite of how
+    the real Franka hand behaves (constant force regardless of gap)
+    and the reason cans slip out during transport — any inertial
+    perturbation that closes the fingers slightly *reduces* grip, so
+    the slip feeds on itself until the object falls.
+
+    This helper rewrites the actuator so that:
+
+    - ``ctrl = 0``   → net force = ``-target_force``  (closing, constant)
+    - ``ctrl = 255`` → net force = ``+target_force``  (opening, constant)
+    - Force is independent of gap (``biasprm[1]`` set to 0)
+
+    The menagerie's default ``forcerange`` of ``[-100, 100]`` N is
+    left untouched; target_force should stay within it (70 N default
+    leaves plenty of headroom).
 
     Args:
         model: Compiled MjModel (modified in place).
-        target_force: Desired grip force at full close [N]. Default 140N
-            from the Franka Emika datasheet.
+        target_force: Total grip force at full close [N]. Default 70 N
+            (the lower end of the Franka Emika continuous-grip spec,
+            35 N per finger). The grip-force sweep in tests/grip_sweep.py
+            showed 50–140 N all achieve 6/6 on 3-can recycling; 70 N is
+            a comfortable middle.
     """
     aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
     if aid < 0:
         return
 
-    # Actuator force model: force = gain * ctrl + bias[1] * length + bias[2] * velocity
-    # To grip at target_force when ctrl=0 and grasping a typical object:
-    #   target_force = |bias[1]| * length_grasp
-    # To hold open when ctrl=255:
-    #   gain * 255 = |bias[1]| * length_open  (zero net force)
-    length_open = 0.08  # 2 × finger_joint open position (0.04m each)
-    length_grasp = 0.066  # typical grasp (e.g., soda can r=33mm)
+    limit = float(model.actuator_forcerange[aid, 1])
+    if target_force > limit:
+        logger.warning(
+            "fix_franka_grip_force: target_force=%.1fN exceeds the "
+            "menagerie actuator's forcerange (%.1fN). The actuator will "
+            "clamp to %.1fN at full close.",
+            target_force,
+            limit,
+            limit,
+        )
 
-    new_bias1 = -target_force / length_grasp
-    new_gain = abs(new_bias1) * length_open / 255.0
+    # Affine actuator force model:
+    #   force = gain[0] * ctrl + bias[0] + bias[1] * length + bias[2] * vel
+    #
+    # For constant force, we set bias[1] = 0. We want a linear map
+    # from ctrl ∈ [0, 255] to force ∈ [-target, +target]:
+    #   force(ctrl) = gain * ctrl + bias[0]
+    #   force(0)   = bias[0]          = -target   → bias[0] = -target
+    #   force(255) = 255*gain + bias[0] = +target → gain = 2*target / 255
+    new_bias0 = -target_force
+    new_gain = 2.0 * target_force / 255.0
 
-    # Scale damping proportionally to bias spring
+    # Keep damping (bias[2]) proportional to the grip force change — it
+    # stabilizes the finger motion against its own inertia. Scale from
+    # the old bias[1] magnitude to preserve the damper's ratio.
     old_bias1 = model.actuator_biasprm[aid, 1]
-    scale = new_bias1 / old_bias1 if old_bias1 != 0 else 1.0
+    old_bias2 = model.actuator_biasprm[aid, 2]
+    damping_scale = abs(new_bias0 / old_bias1) if old_bias1 != 0 else 1.0
 
-    model.actuator_biasprm[aid, 1] = new_bias1
-    model.actuator_biasprm[aid, 2] *= scale
+    model.actuator_biasprm[aid, 0] = new_bias0
+    model.actuator_biasprm[aid, 1] = 0.0  # kill position coupling
+    model.actuator_biasprm[aid, 2] = old_bias2 * damping_scale
     model.actuator_gainprm[aid, 0] = new_gain
 
 
@@ -160,9 +195,11 @@ def add_franka_pad_friction(
     1. **High priority friction**: ``friction=(sliding, torsional,
        rolling)`` with ``priority=1`` so the pad wins over the held
        object's friction (normally MuJoCo takes per-parameter max).
-       Default ``sliding_friction=1.5`` is within the physically
-       plausible range for silicone-on-aluminum; torsional and rolling
-       values are above MuJoCo defaults to resist rotational slip.
+       Default ``sliding=1.5`` is within the physically plausible
+       range for silicone-on-aluminum. Bumping higher (tried 3.0–4.0
+       in the grip sweep) was counterproductive — rigid-contact
+       friction spikes seem to eject compliant objects during grasp
+       close.
 
     2. **Soft contact**: smaller ``solref[0]`` (contact time constant)
        and tighter ``solimp`` (constraint impedance). This lets the
@@ -179,9 +216,10 @@ def add_franka_pad_friction(
     Args:
         spec: MjSpec loaded from a Franka scene XML.
         sliding_friction: Coulomb friction coefficient (1st friction
-            parameter). Real silicone-on-metal is ~1.0-1.5.
+            parameter). Default 1.5 (silicone-on-aluminum range).
         torsional_friction: Rotational friction about contact normal
-            (2nd friction parameter). MuJoCo default 0.005 is too low.
+            (2nd friction parameter). MuJoCo default 0.005 is too low;
+            default 0.05 here resists in-hand twist during transport.
         rolling_friction: Resistance to rolling (3rd friction parameter).
             MuJoCo default 0.0001 is fine but bumped slightly.
         solref: ``(timeconst, dampratio)`` contact solver reference.
@@ -212,6 +250,30 @@ def add_franka_pad_friction(
             geom.solref = solref_list
             geom.solimp = solimp_list
             geom.priority = 1
+
+
+def add_franka_finger_exclude(spec: mujoco.MjSpec) -> None:
+    """Exclude the ``left_finger`` ↔ ``right_finger`` contact pair.
+
+    Must be called **before** ``spec.compile()``.
+
+    The menagerie Franka models the two fingers as independent rigid
+    bodies with their collision boxes meeting at the palm. When the
+    gripper closes on nothing (empty grasp), the solver can't keep the
+    fingers from interpenetrating — they push into each other by up to
+    ~20 mm at rest. That persistent penetration looks like a real
+    collision to the motion planner, so every plan from an
+    empty-closed state fails with "start configuration in collision".
+
+    On the real Franka, a parallel-jaw linkage prevents finger-finger
+    contact entirely (mechanical hard stop before the fingertips
+    touch). Excluding the pair matches that hardware behavior and
+    frees the planner to treat an empty-closed gripper as a normal
+    start state.
+    """
+    exclude = spec.add_exclude()
+    exclude.bodyname1 = "left_finger"
+    exclude.bodyname2 = "right_finger"
 
 
 def add_franka_gravcomp(spec: mujoco.MjSpec) -> None:

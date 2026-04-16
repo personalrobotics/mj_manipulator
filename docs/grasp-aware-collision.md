@@ -128,7 +128,7 @@ This allows contacts with fingers, pads, and other gripper parts while still fla
 1. APPROACH
    Object not grasped — planner avoids it as an obstacle.
 
-2. GRASP DETECTED (gripper closes, contacts detected via detect_grasped_object)
+2. GRASP (gripper closes on target named by caller)
    grasp_manager.mark_grasped("can_0", "right")
    grasp_manager.attach_object("can_0", "gripper/right_pad")
 
@@ -145,23 +145,11 @@ This allows contacts with fingers, pads, and other gripper parts while still fla
    Object returns to normal collision rules.
 ```
 
-## Detecting a Grasp
+## Verifying a Grasp
 
-`detect_grasped_object` checks MuJoCo contacts to find which object the gripper is holding. With `require_bilateral=True` (default), both finger groups must be in contact:
+The BT and primitives path always passes an explicit object name to `ctx.arm().grasp("can_0")` — the caller knows what they're grasping. After close, the `GraspVerifier` confirms the hold using `LoadSignal` readings (gripper position, wrist F/T, joint torques). This works identically on sim and hardware.
 
-```python
-from mj_manipulator.grasp_manager import detect_grasped_object
-
-grasped = detect_grasped_object(
-    model, data,
-    gripper_body_names=arm.gripper.body_names,
-    candidate_objects=["can_0", "can_1", "can_2"],
-    require_bilateral=True,
-)
-# Returns "can_0" or None
-```
-
-Bilateral detection uses body name conventions (`/left_*`, `/right_*`) by default, or an explicit `finger_groups` dict for grippers with other naming.
+For the nameless interactive path (REPL `arm.grasp()` with no argument, or the teleop gripper button), the internal helper `mj_manipulator.grasp_manager.detect_grasped_object` uses MuJoCo contact inspection to identify what landed between the fingers. This is sim-only; on hardware the equivalent is a post-close perception query (see `HardwarePerceptionService` in `mj_manipulator_ros`).
 
 ## Reactive Cartesian Control
 

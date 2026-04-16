@@ -102,11 +102,13 @@ class SimArmController:
 
         # Resolve which object we think we're grasping. For the BT path
         # this is always the target name. For the nameless interactive
-        # path (REPL / teleop), we fall back to the legacy
-        # iter_contacts-based detection helper — documented as sim-only
-        # and slated for replacement once PerceptionService (#175) lands.
-        # On real hardware, the nameless path would need geometric
-        # matching from perceived object poses; not our problem yet.
+        # path (REPL / teleop), we fall back to detect_grasped_object —
+        # an iter_contacts-based helper that's sim-only by design. On
+        # hardware the nameless path will be identified by the
+        # PerceptionService after close (see HardwarePerceptionService
+        # in mj_manipulator_ros). The bookkeeping below (grasp_manager
+        # and verifier) sets up sim's kinematic weld; on hardware
+        # there's no weld and the held-object pose comes from FK.
         target = object_name
         if target is None:
             from mj_manipulator.grasp_manager import detect_grasped_object
