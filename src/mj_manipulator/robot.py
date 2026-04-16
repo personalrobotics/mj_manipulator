@@ -117,6 +117,18 @@ class RobotBase:
         self._context = None
         self._abort_event = threading.Event()
 
+        # Auto-wire a GraspVerifier on every gripper that doesn't already
+        # have one. Mid-transport drop detection is a safety feature every
+        # robot should have by default; requiring each subclass to
+        # remember is a footgun. Subclasses that want custom signal lists
+        # can set ``arm.gripper.grasp_verifier`` before or after super().__init__.
+        from mj_manipulator.grasp_verifier import GraspVerifier
+
+        for arm in arms.values():
+            gripper = arm.gripper
+            if gripper is not None and gripper.grasp_verifier is None:
+                gripper.grasp_verifier = GraspVerifier(gripper=gripper, signals=[])
+
     @property
     def grasp_source(self) -> GraspSource:
         if self._grasp_source is None:

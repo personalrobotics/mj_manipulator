@@ -92,7 +92,8 @@ def build_franka_robot(scene: dict) -> "FrankaDemoRobot":
 
     fix_franka_grip_force(env.model)
 
-    # 4. Arm + gripper + grasp manager.
+    # 4. Arm + gripper + grasp manager. RobotBase.__init__ will
+    # auto-wire a GraspVerifier on the gripper below.
     gm = GraspManager(env.model, env.data)
     gripper = FrankaGripper(env.model, env.data, "franka", grasp_manager=gm)
     arm = create_franka_arm(env, gripper=gripper, grasp_manager=gm)
