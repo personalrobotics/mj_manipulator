@@ -21,9 +21,6 @@ import logging
 import sys
 import time
 
-import mujoco
-import numpy as np
-
 
 def run_one(force: float, friction: float, n_cans: int, verbose: bool = False) -> tuple[int, float]:
     """Run a single recycling trial with the given (force, friction)."""
