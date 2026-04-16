@@ -81,8 +81,9 @@ def build_iiwa14_robot(scene: dict) -> "IIWA14DemoRobot":
         sys.exit(1)
     gripper_spec = mujoco.MjSpec.from_file(str(gripper_xml))
 
-    # Add a canonical grasp_site at the gripper's base_mount origin
-    # (the palm), oriented to match TSR conventions.
+    # Add a canonical grasp_site at the gripper's PALM — the forward
+    # edge of the 2F-85's base housing — oriented to match TSR
+    # conventions.
     #
     # The TSR parallel-jaw hand class assumes the ee_site frame has:
     #   z = approach direction (into object)
@@ -99,10 +100,22 @@ def build_iiwa14_robot(scene: dict) -> "IIWA14DemoRobot":
     # (-base_mount y, +base_mount x, +base_mount z) — so TSR's
     # y-opening matches the gripper's x-opening. Matches the quat
     # that's baked into geodude_assets's 2F-140 grasp_site.
+    #
+    # The PALM POSITION matters too. The 2F-85's ``base`` body is a
+    # chunky housing that extends ~94 mm past base_mount along the
+    # approach axis — putting grasp_site at base_mount origin would
+    # bury it inside the housing, and TSR's grasps (which assume
+    # nothing is forward of the palm except the fingers) would try to
+    # drive the housing into the object. We offset grasp_site by
+    # Robotiq2F85.PALM_OFFSET_FROM_BASE_MOUNT (= 0.094 m) so it sits
+    # just above the housing, matching how geodude_assets's 2F-140
+    # bakes its grasp_site at z=+0.100 m for the same reason.
+    from tsr.hands import Robotiq2F85
+
     gripper_base = gripper_spec.body("base_mount")
     grasp_site_spec = gripper_base.add_site()
     grasp_site_spec.name = "grasp_site"
-    grasp_site_spec.pos = [0.0, 0.0, 0.0]
+    grasp_site_spec.pos = [0.0, 0.0, Robotiq2F85.PALM_OFFSET_FROM_BASE_MOUNT]
     grasp_site_spec.quat = [0.7071, 0.0, 0.0, -0.7071]
 
     link7_ee = spec.site("link7_ee")
@@ -127,7 +140,19 @@ def build_iiwa14_robot(scene: dict) -> "IIWA14DemoRobot":
     else:
         env = Environment.from_model(spec.compile())
 
-    # 5. Arm + gripper + grasp manager.
+    # 5. Fix the gripper's force profile. Menagerie's 2F-85 actuator
+    # has a length-coupled bias that sends grip force → 0 at full
+    # close (identical in shape to the Franka bug), and a forcerange
+    # clamp that caps peak grip at ~70 N on the 2F-85 (low end of the
+    # real hardware's 20–235 N range). The fix below kills the length
+    # coupling and bumps peak tendon force to 15 N, yielding a
+    # constant ~200 N pad grip — comfortable for cans and other
+    # recycling objects.
+    from mj_manipulator.grippers.robotiq import fix_robotiq_grip_force
+
+    fix_robotiq_grip_force(env.model, prefix="gripper/")
+
+    # 6. Arm + gripper + grasp manager.
     # RobotiqGripper appends 'fingers_actuator' and the standard body
     # suffixes under the "gripper/" prefix. We pass the 2F-85-specific
     # kinematic trajectory (recorded via scripts/record_gripper_trajectory.py)
@@ -157,7 +182,7 @@ def build_iiwa14_robot(scene: dict) -> "IIWA14DemoRobot":
         grasp_manager=gm,
     )
 
-    # 6. Open gripper, move to home.
+    # 7. Open gripper, move to home.
     gripper.kinematic_open()
     if gripper.actuator_id is not None:
         env.data.ctrl[gripper.actuator_id] = gripper.ctrl_open
@@ -165,7 +190,7 @@ def build_iiwa14_robot(scene: dict) -> "IIWA14DemoRobot":
         env.data.qpos[idx] = IIWA14_HOME[i]
     mujoco.mj_forward(env.model, env.data)
 
-    # 7. Wrap in a RobotBase subclass and apply the scene.
+    # 8. Wrap in a RobotBase subclass and apply the scene.
     robot = IIWA14DemoRobot(env, arm, list(IIWA14_HOME))
     robot.setup_scenario_scene(scene)
     return robot
