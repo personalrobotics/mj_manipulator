@@ -252,4 +252,3 @@ class TestSafeRetractCollision:
 
         # Expect to stop well before 15 cm — somewhere in (1 cm, 10 cm).
         assert 0.01 < z_travel < 0.10, f"Expected early stop, got z_travel={z_travel * 1000:.1f}mm"
-
