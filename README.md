@@ -8,8 +8,9 @@ Pre-built arm factories in `mj_manipulator.arms`:
 
 - **UR5e** (6-DOF) — `create_ur5e_arm(env)`
 - **Franka Emika Panda** (7-DOF) — `create_franka_arm(env)`
+- **KUKA LBR iiwa 14** (7-DOF) — `create_iiwa14_arm(env)`
 
-See [Adding a New Arm](#adding-a-new-arm) below.
+Bundled demos for Franka (with its built-in hand) and iiwa 14 (with a menagerie Robotiq 2F-85 attached). See [Scenarios and Demos](#scenarios-and-demos) to run them, [Adding a New Arm](#adding-a-new-arm) to bring your own.
 
 ## Installation
 
@@ -225,9 +226,73 @@ In physics mode, entity actuators are controlled alongside arm actuators each st
 
 ## Adding a New Arm
 
-`arms/ur5e.py` (6-DOF) and `arms/franka.py` (7-DOF) are the complete references. The steps:
+`arms/ur5e.py` (6-DOF), `arms/franka.py` (7-DOF), and `arms/iiwa14.py` (7-DOF) are the complete references. For a runnable demo built on top of your arm, read `demos/franka_setup.py` (hand-integrated) or `demos/iiwa14_setup.py` (attach your own gripper).
 
-**1. Create `arms/<robot>.py`**
+### Step 0 — gather constants from the XML
+
+Open your robot's MuJoCo XML and note:
+
+- **Joint names** (e.g. `joint1 … joint7`) and their **limits** (`<joint range="...">`)
+- **Home keyframe** if the model has one (`<keyframe><key name="home" qpos="..."/></keyframe>`)
+- **Tip body name** — the last body in the kinematic chain (often `link7`, `flange`, `wrist_3_link`, `attachment_link`)
+- Whether the model already has a named EE site on the tip body
+
+You'll also need from the **manufacturer datasheet**:
+
+- Joint **velocity limits** (rad/s per joint)
+- Joint **acceleration limits** (rad/s² — often estimated; most datasheets don't publish them)
+
+### Step 1 — add an EE site (if needed)
+
+If the model doesn't have a named site on the tip body, add one via `MjSpec` before compiling.
+
+```python
+import mujoco
+
+def add_my_robot_ee_site(spec: mujoco.MjSpec, site_name: str = "grasp_site") -> None:
+    # Use spec.body(name) — it walks the whole tree. worldbody.find_child
+    # only searches direct children and misses deeply-nested tip bodies.
+    tip = spec.body("link7")   # adjust for your tip body name
+    if tip is None:
+        raise RuntimeError(f"No body named 'link7' in this spec")
+    site = tip.add_site()
+    site.name = site_name
+    site.pos = [0.0, 0.0, 0.0]   # at flange; adjust if you want a TCP offset
+```
+
+See `add_franka_ee_site()` or `add_iiwa14_ee_site()` for full examples.
+
+### Step 2 — (7-DOF only) find the EAIK locked joint
+
+EAIK solves 6-DOF analytically. For 7-DOF, we lock one joint and discretize. Discover which joint to lock with a one-off script:
+
+```python
+from mj_manipulator.arm import Arm
+from mj_manipulator.arms.eaik_solver import _extract_hp, find_locked_joint_index
+from mj_manipulator.config import ArmConfig, KinematicLimits
+import numpy as np
+
+# Create a bare config just to extract H/P
+config = ArmConfig(
+    name="my_robot", entity_type="arm",
+    joint_names=MY_ROBOT_JOINT_NAMES,
+    kinematic_limits=KinematicLimits(velocity=np.ones(7), acceleration=np.ones(7)),
+    ee_site="grasp_site",
+)
+arm = Arm(env, config)  # no IK yet
+first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
+base_body_id     = env.model.body_parentid[first_joint_body]
+H, P, _ = _extract_hp(env.model, env.data, list(arm.joint_ids),
+                      arm.joint_qpos_indices, arm.ee_site_id, base_body_id)
+print(find_locked_joint_index(H, P))
+```
+
+**What if it returns `None`?** Your arm's kinematics don't fit any known EAIK family (no spherical wrist, no spherical base, no parallel pairs after locking). Options:
+
+- Some arms (e.g. Kinova Gen3) are theoretically spherical but their MuJoCo XML has small residual offsets from URDF conversion. EAIK uses exact-equality checks, so a few mm of offset on the "wrong" axis breaks decomposition. You may be able to snap near-zero offsets to zero — see #126 for the discussion.
+- Some arms (e.g. Flexiv Rizon 4) are legitimately non-analytical — joints don't line up in classic ways by design. You'll need numerical IK, which mj_manipulator doesn't ship today (see #127). Pick a different arm or wait for numerical IK support.
+
+### Step 3 — create `arms/<robot>.py`
 
 ```python
 import numpy as np
@@ -235,12 +300,21 @@ from mj_manipulator.arm import Arm
 from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
 from mj_manipulator.config import ArmConfig, KinematicLimits
 
-MY_ROBOT_JOINT_NAMES = ["joint1", "joint2", ...]   # from your XML
+MY_ROBOT_JOINT_NAMES = ["joint1", "joint2", ...]
 MY_ROBOT_HOME        = np.array([0.0, 0.0, ...])
-MY_ROBOT_VEL_LIMITS  = np.array([...]) * 0.5       # datasheet values, halved
+MY_ROBOT_VEL_LIMITS  = np.array([...]) * 0.5   # datasheet values, halved
 MY_ROBOT_ACC_LIMITS  = np.array([...]) * 0.5
+_MY_ROBOT_LOCKED_JOINT = 0  # from step 2 (7-DOF only; omit for 6-DOF)
 
-def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True, ...):
+
+def add_my_robot_gravcomp(spec):
+    """Enable gravity compensation on the arm's kinematic subtree."""
+    from mj_manipulator.arm import add_subtree_gravcomp
+    add_subtree_gravcomp(spec, "base")   # adjust root body name
+
+
+def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True,
+                       tcp_offset=None, gripper=None, grasp_manager=None):
     config = ArmConfig(
         name="my_robot", entity_type="arm",
         joint_names=list(MY_ROBOT_JOINT_NAMES),
@@ -249,9 +323,11 @@ def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True, ...):
             acceleration=MY_ROBOT_ACC_LIMITS.copy(),
         ),
         ee_site=ee_site,
+        tcp_offset=tcp_offset,
     )
     if not with_ik:
-        return Arm(env, config)
+        return Arm(env, config, gripper=gripper, grasp_manager=grasp_manager)
+
     arm = Arm(env, config)
     first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
     base_body_id = env.model.body_parentid[first_joint_body]
@@ -262,53 +338,60 @@ def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True, ...):
         ee_site_id=arm.ee_site_id,
         base_body_id=base_body_id,
         joint_limits=arm.get_joint_limits(),
-        # fixed_joint_index=MY_ROBOT_LOCKED_JOINT,  # 7-DOF only — see step 2
+        fixed_joint_index=_MY_ROBOT_LOCKED_JOINT,   # 7-DOF only
     )
-    return Arm(env, config, ik_solver=ik_solver)
+    return Arm(env, config, ik_solver=ik_solver, gripper=gripper, grasp_manager=grasp_manager)
 ```
 
-**2. Find the locked joint (7-DOF only)**
+### Step 4 — add tests
 
-Run this once as a one-off script to discover which joint to lock:
+Copy `TestIIWA14Factory` / `TestIIWA14IK` / `TestAddIIWA14EeSite` from `tests/test_arms.py`. They verify: factory creates a valid `Arm`, FK-IK round-trip is accurate, solutions are within joint limits, the site helper adds to the right body.
+
+### Step 5 — re-export
 
 ```python
-from mj_manipulator.arms import find_locked_joint_index
-from mj_manipulator.arms.eaik_solver import _extract_hp
-
-arm = Arm(env, config)  # create without IK first
-first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
-base_body_id     = env.model.body_parentid[first_joint_body]
-H, P, _          = _extract_hp(env.model, env.data, list(arm.joint_ids),
-                                arm.joint_qpos_indices, arm.ee_site_id, base_body_id)
-print(find_locked_joint_index(H, P))  # → hardcode this as MY_ROBOT_LOCKED_JOINT
+# arms/__init__.py
+from mj_manipulator.arms.my_robot import (
+    create_my_robot_arm,
+    add_my_robot_ee_site,
+    add_my_robot_gravcomp,
+)
 ```
 
-Then pass `fixed_joint_index=MY_ROBOT_LOCKED_JOINT` to `MuJoCoEAIKSolver`.
+### Step 6 — build a runnable demo (optional but recommended)
 
-**3. Add an EE site if the model doesn't have one**
+See `demos/iiwa14_setup.py` for the copy-template. Six steps:
 
-Use `MjSpec` to add the site before creating the `Environment`:
+1. Load your robot's menagerie scene (`menagerie_scene("my_robot")`)
+2. Call your `add_my_robot_ee_site(spec)` and `add_my_robot_gravcomp(spec)`
+3. Optionally add a worktop plate to the spec (for objects to sit on)
+4. Optionally attach a gripper via `spec.attach(gripper_spec, prefix="gripper/", site=...)`.
+   Menagerie ships the Robotiq 2F-85 (`<menagerie>/robotiq_2f85/2f85.xml`) which works
+   with `mj_manipulator.grippers.RobotiqGripper` out of the box.
+5. Build the environment and arm
+6. Wrap in a `RobotBase` subclass that implements `get_worktop_pose()` and `reset(scene)`
+
+Then wire the demo into `cli.py`'s `_ROBOTS` dict:
 
 ```python
-spec = mujoco.MjSpec.from_file("path/to/scene.xml")
-hand = spec.worldbody.find_child("hand")  # adjust to your link name
-site = hand.add_site()
-site.name = "grasp_site"
-site.pos = [0, 0, 0.1]   # at palm/flange; z = approach direction
-model = spec.compile()
-env = Environment.from_model(model)
+_ROBOTS = {
+    "franka": ("Franka", "mj_manipulator.demos.franka_setup", "build_franka_robot"),
+    "iiwa14": ("iiwa14", "mj_manipulator.demos.iiwa14_setup", "build_iiwa14_robot"),
+    "my_robot": ("MyRobot", "mj_manipulator.demos.my_robot_setup", "build_my_robot_robot"),
+}
 ```
 
-See `add_franka_ee_site()` in `arms/franka.py` for the pattern.
+`python -m mj_manipulator --robot my_robot --scenario recycling` then runs the existing recycling scenario on your new arm — a portability test for your setup.
 
-**4. Add tests** — copy `TestUR5eFactory` / `TestUR5eIK` from `tests/test_arms.py`:
-factory creates valid Arm, FK-IK round-trip, all solutions within joint limits.
+### Notes on grippers
 
-**5. Re-export** — add to `arms/__init__.py`:
-```python
-from mj_manipulator.arms.my_robot import create_my_robot_arm
-__all__ = [..., "create_my_robot_arm"]
-```
+If you attach a menagerie gripper and it drops objects during transit, check:
+
+- **Position-spring vs constant-force actuator**: many menagerie grippers ship as position-springs where grip force weakens as fingers close (a real problem for compliant objects). See `fix_franka_grip_force` in `arms/franka.py` for how to rewrite the actuator.
+- **Finger self-collision**: menagerie grippers often let the fingers interpenetrate on empty close, which breaks motion planning ("start in collision"). Exclude the finger↔finger pair via `spec.add_exclude()`. See `add_franka_finger_exclude` for the pattern.
+- **Pad friction**: raise sliding friction to ~1.5 and torsional to ~0.05. See `add_franka_pad_friction`.
+
+The grip sweep harness at `tests/grip_sweep.py` is a useful tool for tuning these parameters against a specific object set.
 
 ## Behavior Trees
 
@@ -363,12 +446,16 @@ The framework doesn't enforce portability — write what the task needs.
 ### Running
 
 ```bash
-python -m mj_manipulator                           # scenario picker
-python -m mj_manipulator --scenario recycling      # run the recycling scenario
-python -m mj_manipulator --list-scenarios          # list discovered scenarios
+python -m mj_manipulator                                  # Franka + scenario picker
+python -m mj_manipulator --robot iiwa14                   # iiwa 14 + picker
+python -m mj_manipulator --scenario recycling             # Franka + recycling
+python -m mj_manipulator --robot iiwa14 --scenario recycling
+python -m mj_manipulator --list-scenarios                 # list and exit
 ```
 
-Built-in scenarios live under `src/mj_manipulator/demos/`; `python -m mj_manipulator` defaults to a Franka Panda. Other workspace packages (like `geodude`) define their own scenarios using the same format — see `geodude/src/geodude/demos/`.
+The same scenario file runs on both robots unchanged — a portability test for the scenario system.
+
+Built-in scenarios live under `src/mj_manipulator/demos/`. Other workspace packages (like `geodude`) define their own scenarios using the same format — see `geodude/src/geodude/demos/`.
 
 ### Reference scripts
 
