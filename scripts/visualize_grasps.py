@@ -352,9 +352,7 @@ def build_scene(gripper: GripperSpec, obj: ObjectShape) -> tuple[mujoco.MjModel,
         for cid in range(model.nbody):
             if int(model.body_parentid[cid]) == bid and cid != bid:
                 stack.append(cid)
-    gripper_geom_ids: set[int] = {
-        g for g in range(model.ngeom) if int(model.geom_bodyid[g]) in gripper_body_ids
-    }
+    gripper_geom_ids: set[int] = {g for g in range(model.ngeom) if int(model.geom_bodyid[g]) in gripper_body_ids}
 
     ids = {
         "freejoint_qpos": int(fj_addr),
@@ -521,9 +519,7 @@ def _run_viewer(model, data, ids, gripper: GripperSpec, obj: ObjectShape, templa
 
         def setup(self_, gui, viewer) -> None:
             with gui.add_folder("Grasp Viz"):
-                gui.add_markdown(
-                    f"**Gripper:** {gripper.hand_type}\n\n**Object:** {obj.name} ({obj.type})"
-                )
+                gui.add_markdown(f"**Gripper:** {gripper.hand_type}\n\n**Object:** {obj.name} ({obj.type})")
                 gui.add_markdown(f"**Templates:** {len(templates)}")
 
                 def on_next_sample(_event) -> None:

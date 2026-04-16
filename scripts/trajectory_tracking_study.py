@@ -221,8 +221,7 @@ def run_tracking_study(robot_name: str, out_csv: Path | None = None) -> dict:
     print(f"Trajectory duration: {traj.duration:.2f}s, {len(samples)} samples")
     print()
     print(
-        f"{'joint':<8}  {'RMS err (rad)':>14}  {'max err (rad)':>14}  "
-        f"{'qd RMS (rad/s)':>14}  {'lag @ peak (ms)':>16}"
+        f"{'joint':<8}  {'RMS err (rad)':>14}  {'max err (rad)':>14}  {'qd RMS (rad/s)':>14}  {'lag @ peak (ms)':>16}"
     )
     print("-" * 80)
     for j in range(n_dof):

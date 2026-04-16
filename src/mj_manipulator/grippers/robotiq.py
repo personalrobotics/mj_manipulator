@@ -244,9 +244,7 @@ def fix_robotiq_grip_force(
     """
     aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, prefix + actuator_name)
     if aid < 0:
-        raise RuntimeError(
-            f"fix_robotiq_grip_force: no actuator named {prefix + actuator_name!r} in this model."
-        )
+        raise RuntimeError(f"fix_robotiq_grip_force: no actuator named {prefix + actuator_name!r} in this model.")
 
     # Affine force model: force = gain[0]*ctrl + bias[0] + bias[1]*length + bias[2]*vel
     #   force(0)   = bias[0]        = -target  →  bias[0] = -target

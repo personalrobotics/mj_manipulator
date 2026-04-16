@@ -103,9 +103,7 @@ def _collect_extents(model, data, ids) -> list[GeomExtent]:
         geom_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, gid) or f"geom{gid}"
         # "Finger" = pad, finger, or follower (the body that carries the
         # pad on the 2F-140 where pads don't get their own body).
-        is_finger = any(
-            tok in s.lower() for s in (body_name, geom_name) for tok in ("pad", "finger", "follower")
-        )
+        is_finger = any(tok in s.lower() for s in (body_name, geom_name) for tok in ("pad", "finger", "follower"))
         out.append(
             GeomExtent(
                 geom_name=geom_name,
@@ -199,14 +197,9 @@ def validate(gripper_name: str, object_name: str, samples: int, seed: int) -> bo
     # have smaller |y| values but aren't the contact surface — using them
     # would underreport the aperture. If no pad-named geoms exist (e.g.
     # 2F-140 puts pad meshes inside the follower body), skip the check.
-    pad_exts = [
-        e for e in finger_exts
-        if "pad" in e.geom_name.lower() or "pad" in e.body_name.lower()
-    ]
+    pad_exts = [e for e in finger_exts if "pad" in e.geom_name.lower() or "pad" in e.body_name.lower()]
     inner_ys = [
-        min(abs(e.opening_min), abs(e.opening_max))
-        for e in pad_exts
-        if not (e.opening_min <= 0 <= e.opening_max)
+        min(abs(e.opening_min), abs(e.opening_max)) for e in pad_exts if not (e.opening_min <= 0 <= e.opening_max)
     ]
     measured_aperture = 2.0 * min(inner_ys) if inner_ys else 0.0
 
@@ -228,8 +221,8 @@ def validate(gripper_name: str, object_name: str, samples: int, seed: int) -> bo
         kind = "finger" if e.is_finger else "other"
         print(
             f"  {e.body_name:<25} "
-            f"[{e.approach_min*1000:+6.1f}, {e.approach_max*1000:+6.1f}] "
-            f"[{e.opening_min*1000:+6.1f}, {e.opening_max*1000:+6.1f}] "
+            f"[{e.approach_min * 1000:+6.1f}, {e.approach_max * 1000:+6.1f}] "
+            f"[{e.opening_min * 1000:+6.1f}, {e.opening_max * 1000:+6.1f}] "
             f"{kind:<8}"
         )
 
@@ -245,16 +238,13 @@ def validate(gripper_name: str, object_name: str, samples: int, seed: int) -> bo
 
     # Informational geometry summary.
     print("\nGeometry summary:")
-    print(
-        f"  FINGER_LENGTH    declared={declared_fl*1000:6.1f} mm   "
-        f"measured finger tip={finger_tip*1000:6.1f} mm"
-    )
+    print(f"  FINGER_LENGTH    declared={declared_fl * 1000:6.1f} mm   measured finger tip={finger_tip * 1000:6.1f} mm")
     if measured_aperture > 0:
         print(
-            f"  MAX_APERTURE     declared={declared_aperture*1000:6.1f} mm   "
-            f"measured inner-face gap={measured_aperture*1000:6.1f} mm"
+            f"  MAX_APERTURE     declared={declared_aperture * 1000:6.1f} mm   "
+            f"measured inner-face gap={measured_aperture * 1000:6.1f} mm"
         )
-    print(f"  Housing forward-of-grasp_site:  {housing_forward*1000:+6.1f} mm")
+    print(f"  Housing forward-of-grasp_site:  {housing_forward * 1000:+6.1f} mm")
 
     # Pass / fail + diagnostics.
     passed = total_hits == 0
@@ -287,13 +277,11 @@ def validate(gripper_name: str, object_name: str, samples: int, seed: int) -> bo
         shift = offending_extent
         new_fl = declared_fl - shift
         print(
-            f"\n  Diagnosis: the colliding geom(s) extend {shift*1000:.1f} mm forward of grasp_site. "
+            f"\n  Diagnosis: the colliding geom(s) extend {shift * 1000:.1f} mm forward of grasp_site. "
             f"TSR assumes everything except fingers is behind the palm — that's violated here."
         )
         print("\n  Suggested fix:")
-        print(
-            f"    1. Move grasp_site forward by {shift:.3f} m along the approach axis."
-        )
+        print(f"    1. Move grasp_site forward by {shift:.3f} m along the approach axis.")
         print(
             f"    2. Reduce FINGER_LENGTH: {declared_fl:.3f} → {new_fl:.3f} m "
             f"(so the fingertip position in world stays unchanged)."
