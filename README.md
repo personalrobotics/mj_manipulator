@@ -312,29 +312,91 @@ __all__ = [..., "create_my_robot_arm"]
 
 ## Behavior Trees
 
-Optional `mj_manipulator.bt` subpackage provides py_trees leaf nodes for composing manipulation tasks as behavior trees. Install with `pip install mj_manipulator[bt]`.
+Optional `mj_manipulator.bt` subpackage provides py_trees leaf nodes for composing manipulation tasks as behavior trees. Install with `uv add "mj-manipulator[bt]"`.
 
-**Leaf nodes:** `PlanToTSRs`, `PlanToConfig`, `Retime`, `Execute`, `Grasp`, `Release`, `CartesianMove`, `Sync`
+**Leaf nodes:** `GenerateGrasps`, `GeneratePlaceTSRs`, `PlanToTSRs`, `PlanToConfig`, `Retime`, `Execute`, `Grasp`, `Release`, `CartesianMove`, `SafeRetract`, `Sync`, `CheckNotNearConfig`.
 
-**Subtree builders:** `pickup_with_recovery`, `place_with_recovery`, `plan_and_execute`, `recover`
+**Subtree builders:** `pickup(ns)`, `place(ns)` — flat sequences, no recovery. Recovery lives in the primitives layer (`mj_manipulator.primitives`).
 
 ```python
-from mj_manipulator.bt import pickup_with_recovery
+from mj_manipulator.bt import pickup
 import py_trees
 
-tree = pickup_with_recovery("/ur5e")
+tree = pickup("/ur5e")
 print(py_trees.display.ascii_tree(tree))
 ```
 
-All nodes use namespaced blackboard keys (`{ns}/arm`, `{ns}/grasp_tsrs`, etc.) for multi-arm support. Robot-specific packages (e.g., geodude) compose these into task-level trees.
+All nodes use namespaced blackboard keys (`{ns}/arm`, `{ns}/grasp_tsrs`, etc.) for multi-arm support. See `docs/behavior-trees.md` for the composition guide.
 
-## Demos
+## Scenarios and Demos
+
+A **scenario** is a Python module with a `scene = {...}` dict and optional user-facing functions:
+
+```python
+# my_task.py
+"""One-line description."""
+
+scene = {
+    "objects": {"can": 5},                                   # pool of graspable types
+    "fixtures": {"yellow_tote": [[-0.5, 0.0, 0.0]]},         # stationary objects
+    # "spawn_count": 3,                                       # optional: random subset
+}
+
+def sort_all(robot):
+    while robot.pickup():
+        robot.place("yellow_tote")
+        robot.go_home()
+    robot.go_home()
+```
+
+The `mj_manipulator.scenarios` package handles discovery, loading, `robot` binding, and reset. Your function signatures take `robot` as the first argument; the scenario runner binds it via `functools.partial` so the IPython console calls `sort_all()` with no arguments.
+
+### Portability
+
+Scenarios are portable by convention, not by mandate:
+
+- **Portable scenarios** use only `RobotBase` methods (`pickup`, `place`, `go_home`, `find_objects`, `holding`). The same `recycling.py` runs on a Franka, a UR5e, or a bimanual Geodude.
+- **Robot-specific scenarios** can use anything on their `robot` instance (`robot._left_base.set_height(...)`, `robot._perception.refresh()`, etc.). Document the requirement in the docstring.
+
+The framework doesn't enforce portability — write what the task needs.
+
+### Running
 
 ```bash
-cd mj_manipulator
-uv run mjpython demos/recycling.py --robot both      # UR5e + Franka recycling
-uv run mjpython demos/bt_recycle.py --robot ur5e      # Same task, behavior tree orchestration
-uv run mjpython demos/recycling.py --robot ur5e --headless
-uv run python demos/ik_solver.py                      # EAIK analytical IK
-uv run python demos/arm_planning.py                   # Motion planning with CBiRRT
+python -m mj_manipulator                           # scenario picker
+python -m mj_manipulator --scenario recycling      # run the recycling scenario
+python -m mj_manipulator --list-scenarios          # list discovered scenarios
 ```
+
+Built-in scenarios live under `src/mj_manipulator/demos/`; `python -m mj_manipulator` defaults to a Franka Panda. Other workspace packages (like `geodude`) define their own scenarios using the same format — see `geodude/src/geodude/demos/`.
+
+### Reference scripts
+
+Short examples of individual APIs, at `demos/` in the repo root:
+
+```bash
+uv run python demos/ik_solver.py         # EAIK analytical IK
+uv run python demos/arm_planning.py      # CBiRRT motion planning
+uv run python demos/collision_check.py   # Collision checking modes
+```
+
+## Building Your Own Demo
+
+You **import** mj_manipulator; you don't copy it. Your own package sits alongside `mj_manipulator` in the workspace (like `geodude` does):
+
+```python
+from mj_manipulator import RobotBase, SimContext, GraspManager
+from mj_manipulator.arms.franka import create_franka_arm
+from mj_manipulator.scenarios import WorktopPose
+```
+
+The template for wiring your own arm is [`src/mj_manipulator/demos/franka_setup.py`](src/mj_manipulator/demos/franka_setup.py). It's six commented steps:
+
+1. Load the model (MjSpec + gravcomp injection)
+2. Add a worktop surface (so the scenario system knows where to scatter objects)
+3. Build the `Environment`
+4. Construct arm, gripper, grasp manager
+5. Home the robot (qpos → home, gripper open)
+6. Wrap in a `RobotBase` subclass and apply the scene
+
+To bring your own arm: copy that file into your own package, swap the Franka-specific bits (factory, gripper, home pose) for your own, adjust the worktop if needed. Everything else (planning, execution, grasping, BT nodes, scenarios) comes from mj_manipulator unchanged.
