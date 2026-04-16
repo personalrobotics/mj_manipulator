@@ -62,7 +62,7 @@ _FRANKA_LOCKED_JOINT_INDEX = 4
 # ---------------------------------------------------------------------------
 
 
-def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) -> None:
+def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 70.0) -> None:
     """Replace Franka gripper actuator with a **constant-force** grip.
 
     The menagerie model ships actuator8 as a *position-spring*
@@ -90,8 +90,12 @@ def fix_franka_grip_force(model: mujoco.MjModel, target_force: float = 140.0) ->
 
     Args:
         model: Compiled MjModel (modified in place).
-        target_force: Desired grip force at full close [N]. Default 140N
-            from the Franka Emika datasheet (70 N per finger).
+        target_force: Total grip force at full close [N]. Default 70 N
+            (the lower end of the Franka Emika continuous-grip spec,
+            35 N per finger). Pairs with sticky pads (high friction
+            in :func:`add_franka_pad_friction`) — sim rigid contact
+            over-squeezes compliant objects at the hardware max, so
+            we rely on friction to hold and keep normal force gentle.
     """
     aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "actuator8")
     if aid < 0:
@@ -163,8 +167,8 @@ def add_franka_ee_site(
 def add_franka_pad_friction(
     spec: mujoco.MjSpec,
     *,
-    sliding_friction: float = 1.5,
-    torsional_friction: float = 0.05,
+    sliding_friction: float = 3.0,
+    torsional_friction: float = 0.2,
     rolling_friction: float = 0.0002,
     solref: tuple[float, float] = (0.01, 1.0),
     solimp: tuple[float, float, float, float, float] = (0.9, 0.95, 0.001, 0.5, 2.0),
@@ -189,9 +193,13 @@ def add_franka_pad_friction(
     1. **High priority friction**: ``friction=(sliding, torsional,
        rolling)`` with ``priority=1`` so the pad wins over the held
        object's friction (normally MuJoCo takes per-parameter max).
-       Default ``sliding_friction=1.5`` is within the physically
-       plausible range for silicone-on-aluminum; torsional and rolling
-       values are above MuJoCo defaults to resist rotational slip.
+       Defaults ``sliding=3.0``, ``torsional=0.2`` are above the
+       physical silicone-on-aluminum range (~1.0-1.5 measured) as a
+       deliberate sim cheat: rigid contact can't model the way real
+       silicone pads deform into the object and convert normal force
+       into a wider contact strip. Extra friction compensates for the
+       missing compliance, letting us use a gentle (70 N) squeeze
+       without dropping cans in transit.
 
     2. **Soft contact**: smaller ``solref[0]`` (contact time constant)
        and tighter ``solimp`` (constraint impedance). This lets the
@@ -208,9 +216,11 @@ def add_franka_pad_friction(
     Args:
         spec: MjSpec loaded from a Franka scene XML.
         sliding_friction: Coulomb friction coefficient (1st friction
-            parameter). Real silicone-on-metal is ~1.0-1.5.
+            parameter). Default 3.0 — above real silicone-on-metal
+            (~1.0-1.5) as a sim cheat; see note above.
         torsional_friction: Rotational friction about contact normal
-            (2nd friction parameter). MuJoCo default 0.005 is too low.
+            (2nd friction parameter). MuJoCo default 0.005 is too low;
+            default 0.2 here resists in-hand twist during transport.
         rolling_friction: Resistance to rolling (3rd friction parameter).
             MuJoCo default 0.0001 is fine but bumped slightly.
         solref: ``(timeconst, dampratio)`` contact solver reference.
