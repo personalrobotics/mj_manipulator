@@ -28,13 +28,17 @@ from mj_manipulator.protocols import IKSolver  # noqa: E402
 def ur5e_setup():
     """UR5e arm + MinkIKSolver."""
     from mj_manipulator.arms.ur5e import UR5E_HOME, add_ur5e_gravcomp, create_ur5e_arm
-    from mj_manipulator.menagerie import menagerie_scene
 
-    spec = mujoco.MjSpec.from_file(str(menagerie_scene("universal_robots_ur5e")))
+    try:
+        from mj_manipulator.menagerie import menagerie_scene
+
+        spec = mujoco.MjSpec.from_file(str(menagerie_scene("universal_robots_ur5e")))
+    except FileNotFoundError:
+        pytest.skip("mujoco_menagerie not found")
     add_ur5e_gravcomp(spec)
     env = Environment.from_model(spec.compile())
     arm = create_ur5e_arm(env, with_ik=False)
-    solver = make_mink_solver(arm, ee_frame_name="attachment_site")
+    solver = make_mink_solver(arm)
     return arm, solver, np.array(UR5E_HOME)
 
 
@@ -42,14 +46,18 @@ def ur5e_setup():
 def franka_setup():
     """Franka arm + MinkIKSolver."""
     from mj_manipulator.arms.franka import FRANKA_HOME, add_franka_ee_site, add_franka_gravcomp, create_franka_arm
-    from mj_manipulator.menagerie import menagerie_scene
 
-    spec = mujoco.MjSpec.from_file(str(menagerie_scene("franka_emika_panda")))
+    try:
+        from mj_manipulator.menagerie import menagerie_scene
+
+        spec = mujoco.MjSpec.from_file(str(menagerie_scene("franka_emika_panda")))
+    except FileNotFoundError:
+        pytest.skip("mujoco_menagerie not found")
     add_franka_ee_site(spec)
     add_franka_gravcomp(spec)
     env = Environment.from_model(spec.compile())
     arm = create_franka_arm(env, with_ik=False)
-    solver = make_mink_solver(arm, ee_frame_name="grasp_site")
+    solver = make_mink_solver(arm)
     return arm, solver, np.array(FRANKA_HOME)
 
 
@@ -57,14 +65,18 @@ def franka_setup():
 def iiwa14_setup():
     """KUKA iiwa 14 arm + MinkIKSolver."""
     from mj_manipulator.arms.iiwa14 import IIWA14_HOME, add_iiwa14_ee_site, add_iiwa14_gravcomp, create_iiwa14_arm
-    from mj_manipulator.menagerie import menagerie_scene
 
-    spec = mujoco.MjSpec.from_file(str(menagerie_scene("kuka_iiwa_14")))
+    try:
+        from mj_manipulator.menagerie import menagerie_scene
+
+        spec = mujoco.MjSpec.from_file(str(menagerie_scene("kuka_iiwa_14")))
+    except FileNotFoundError:
+        pytest.skip("mujoco_menagerie not found")
     add_iiwa14_ee_site(spec)
     add_iiwa14_gravcomp(spec)
     env = Environment.from_model(spec.compile())
     arm = create_iiwa14_arm(env, with_ik=False)
-    solver = make_mink_solver(arm, ee_frame_name="grasp_site")
+    solver = make_mink_solver(arm)
     return arm, solver, np.array(IIWA14_HOME)
 
 
