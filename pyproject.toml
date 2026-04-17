@@ -20,6 +20,7 @@ dependencies = [
     "pycbirrt @ git+https://github.com/personalrobotics/pycbirrt.git",
     "tsr @ git+https://github.com/personalrobotics/tsr.git",
     "eaik",
+    "mink>=1.1.0",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
 ]
 
@@ -41,7 +42,6 @@ dev = [
     "pytest",
     "ruff",
 ]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
