@@ -65,7 +65,12 @@ _ATTACHMENT_BODY_SUFFIX = "base_mount"
 # Pre-recorded gripper joint trajectory from physics simulation.
 # Shape: (101, 8) — 101 waypoints from open (t=0) to closed (t=1), 8 joints.
 # Joint order matches _JOINT_SUFFIXES above.
-_GRIPPER_TRAJECTORY = np.array(
+#
+# This specific table is for the **Robotiq 2F-140** (geodude_assets
+# model). The 2F-85 has inverted joint signs and needs its own table;
+# record it via ``scripts/record_gripper_trajectory.py`` and pass via
+# ``RobotiqGripper(..., trajectory=...)``.
+_2F140_TRAJECTORY = np.array(
     [
         [-0.000622, -0.025613, 0.032463, -0.027563, -0.000610, -0.025589, 0.032481, -0.027446],
         [-0.000622, -0.028316, 0.035389, -0.030293, -0.000609, -0.028292, 0.035394, -0.030171],
@@ -173,21 +178,122 @@ _GRIPPER_TRAJECTORY = np.array(
 
 
 # ---------------------------------------------------------------------------
+# Grip-force fix
+# ---------------------------------------------------------------------------
+
+
+def fix_robotiq_grip_force(
+    model: mujoco.MjModel,
+    *,
+    prefix: str = "",
+    target_tendon_force: float = 15.0,
+    actuator_name: str = "fingers_actuator",
+) -> None:
+    """Replace the Robotiq gripper actuator with a **constant-force** grip.
+
+    Both menagerie 2F-85 and geodude_assets 2F-140 ship the same buggy
+    actuator: a position actuator whose generalized force couples
+    linearly to *tendon length*:
+
+        force = gain[0] * ctrl + bias[0] + bias[1] * length + bias[2] * vel
+              = 0.3137 * ctrl + 0 + (-100) * length + (-10) * vel
+
+    With ``ctrl=255`` (close command) and the tendon fully extended
+    (``length=0.8`` at fully-closed):
+
+        force = 80 - 80 = 0
+
+    i.e. **grip force vanishes exactly when the fingers are fully
+    closed**. If the object ever slips through the jaws, the gripper
+    relaxes instead of trying to re-close — the same pathology the
+    Franka hand had, fixed by :func:`fix_franka_grip_force`.
+
+    Additionally, the menagerie ``forcerange="-5 5"`` clamps peak tendon
+    force to 5 N. On the 2F-85 that works out to roughly 70 N of pad
+    force (low end of the real Robotiq 20–235 N spec). For heavier or
+    smoother objects, that's not enough — cans slip during transport
+    when the arm accelerates.
+
+    This helper rewrites ``actuator_name`` so:
+
+    - ``ctrl = 0``   → tendon force = ``-target_tendon_force`` (open)
+    - ``ctrl = 255`` → tendon force = ``+target_tendon_force`` (close)
+    - Force is independent of tendon length (``biasprm[1] = 0``)
+    - ``forcerange`` widens to ``±(target_tendon_force + small margin)``
+
+    The ``bias[2]`` velocity-damping term is preserved (scaled to the
+    new bias magnitude) to keep the finger linkage stable against its
+    own inertia.
+
+    Args:
+        model: Compiled MjModel (modified in place).
+        prefix: Actuator-name prefix. Use ``"gripper/"`` if the gripper
+            was attached via ``spec.attach(gripper_spec, prefix="gripper/")``.
+        target_tendon_force: Peak tendon force [N] at full close.
+            Default 15 N — roughly 3× the menagerie default, yielding
+            ~200 N pad force on the 2F-85 (middle of the real Robotiq
+            spec). Scale down to 5 N for delicate objects, up to 25 N
+            for heavy objects.
+        actuator_name: Actuator to fix (default ``"fingers_actuator"``,
+            which is the name used by both menagerie 2F-85 and
+            geodude_assets 2F-140).
+
+    See ``mj_manipulator/docs/grippers.md`` §2 for the full affine-force
+    derivation, the mechanical-advantage numbers for each gripper, and
+    tuning guidance.
+    """
+    aid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, prefix + actuator_name)
+    if aid < 0:
+        raise RuntimeError(f"fix_robotiq_grip_force: no actuator named {prefix + actuator_name!r} in this model.")
+
+    # Affine force model: force = gain[0]*ctrl + bias[0] + bias[1]*length + bias[2]*vel
+    #   force(0)   = bias[0]        = -target  →  bias[0] = -target
+    #   force(255) = 255*gain + bias[0] = +target → gain = 2*target/255
+    new_bias0 = -target_tendon_force
+    new_gain = 2.0 * target_tendon_force / 255.0
+
+    # Preserve damping ratio — scale by the magnitude change in bias[0].
+    old_bias1 = model.actuator_biasprm[aid, 1]
+    old_bias2 = model.actuator_biasprm[aid, 2]
+    damping_scale = abs(new_bias0 / old_bias1) if old_bias1 != 0 else 1.0
+
+    model.actuator_biasprm[aid, 0] = new_bias0
+    model.actuator_biasprm[aid, 1] = 0.0  # kill length coupling
+    model.actuator_biasprm[aid, 2] = old_bias2 * damping_scale
+    model.actuator_gainprm[aid, 0] = new_gain
+
+    # Widen forcerange to let the actuator actually produce target_tendon_force.
+    # Add 20 % margin so transient velocity-damping spikes don't hit the clamp.
+    margin = 1.2
+    model.actuator_forcerange[aid, 0] = -target_tendon_force * margin
+    model.actuator_forcerange[aid, 1] = +target_tendon_force * margin
+
+
+# ---------------------------------------------------------------------------
 # RobotiqGripper
 # ---------------------------------------------------------------------------
 
 
 class RobotiqGripper(_BaseGripper):
-    """Robotiq 2F-140 parallel jaw gripper.
+    """Robotiq 2-finger parallel-jaw gripper (2F-140 or 2F-85).
 
-    Supports the Robotiq 2F-140 4-bar linkage gripper used with UR5e arms.
-    In kinematic mode, replays a pre-recorded physics trajectory to maintain
-    correct linkage geometry. In physics mode, the PhysicsController drives
+    Supports the 4-bar linkage Robotiq grippers. In kinematic mode,
+    replays a pre-recorded physics trajectory to maintain correct
+    linkage geometry. In physics mode, the PhysicsController drives
     the tendon actuator directly.
 
     The ``prefix`` parameter handles namespacing in multi-robot scenes.
-    For a standalone Robotiq model, use ``prefix=""``. For a prefixed model
-    (e.g., geodude's ``right_ur5e/gripper/``), pass the full prefix.
+    For a standalone Robotiq model, use ``prefix=""``. For a prefixed
+    model (e.g. geodude's ``right_ur5e/gripper/``), pass the full prefix.
+
+    Variant selection:
+
+    - By default, this class behaves as a **2F-140** — it uses the
+      2F-140 kinematic trajectory and reports ``hand_type="robotiq_2f140"``
+      (which makes grasp sources load the ``Robotiq2F140`` TSR class).
+    - To use a **2F-85** (or any other variant), pass a per-variant
+      ``trajectory`` and ``hand_type_override``. The 2F-85 trajectory
+      lives in :mod:`mj_manipulator.grippers._robotiq_2f85_trajectory`.
 
     Args:
         model: MuJoCo model.
@@ -195,21 +301,28 @@ class RobotiqGripper(_BaseGripper):
         arm_name: Which arm this gripper belongs to.
         prefix: MuJoCo name prefix for all gripper elements.
         grasp_manager: Optional grasp state tracker.
+        trajectory: Per-variant kinematic trajectory, shape ``(N, 8)``
+            with joint order matching ``_JOINT_SUFFIXES``. ``None``
+            uses the built-in 2F-140 trajectory.
+        hand_type_override: Reported as ``self.hand_type`` so grasp
+            sources pick the right TSR hand class. ``None`` falls back
+            to ``"robotiq_2f140"``.
     """
 
-    hand_type: str = "robotiq"
-    # The Robotiq 2F-140 has 14 cm of finger travel, so fully-closed
-    # can in principle still hold an extremely thin object — but in
-    # practice the objects we grasp are much wider than the
-    # ``empty_position_threshold`` resolution (default 2% = 2.8 mm on
-    # the 140 mm travel). Treating fully-closed as \"empty\" lets the
+    # Default hand_type is the 2F-140 (backward compat). Instances can
+    # override this via the hand_type_override constructor kwarg.
+    hand_type: str = "robotiq_2f140"
+
+    # The Robotiq has continuous finger travel, so fully-closed can in
+    # principle still hold an extremely thin object — but in practice
+    # the objects we grasp are much wider than the verifier's position
+    # threshold. Treating fully-closed as "empty" lets the
     # :class:`~mj_manipulator.grasp_verifier.GraspVerifier`'s
-    # decisive-negative branch fire immediately when the gripper
-    # closed on nothing, which is a crisp, noise-free, motion-
-    # independent signal — better than trying to derive the same
-    # verdict from F/T readings that bounce around during transport.
-    # See personalrobotics/geodude#173 and personalrobotics/mj_manipulator#98
-    # for the full story.
+    # decisive-negative branch fire immediately when the gripper closed
+    # on nothing, which is a crisp, noise-free, motion-independent
+    # signal — better than trying to derive the same verdict from F/T
+    # readings that bounce around during transport. See
+    # personalrobotics/geodude#173 and personalrobotics/mj_manipulator#98.
     empty_at_fully_closed: bool = True
 
     def __init__(
@@ -219,6 +332,8 @@ class RobotiqGripper(_BaseGripper):
         arm_name: str,
         prefix: str = "",
         grasp_manager: GraspManager | None = None,
+        trajectory: np.ndarray | None = None,
+        hand_type_override: str | None = None,
     ):
         # Resolve actuator
         actuator_name = f"{prefix}fingers_actuator"
@@ -240,6 +355,11 @@ class RobotiqGripper(_BaseGripper):
             ctrl_closed=255.0,
             grasp_manager=grasp_manager,
         )
+
+        # Per-instance trajectory and hand_type.
+        self._trajectory = trajectory if trajectory is not None else _2F140_TRAJECTORY
+        if hand_type_override is not None:
+            self.hand_type = hand_type_override
 
         # Resolve gripper joint qpos indices for kinematic control
         indices = []
@@ -267,13 +387,14 @@ class RobotiqGripper(_BaseGripper):
             return
 
         t = np.clip(t, 0.0, 1.0)
-        n = len(_GRIPPER_TRAJECTORY) - 1
+        trajectory = self._trajectory
+        n = len(trajectory) - 1
         idx = t * n
         idx_low = int(idx)
         idx_high = min(idx_low + 1, n)
         alpha = idx - idx_low
 
-        joint_positions = (1 - alpha) * _GRIPPER_TRAJECTORY[idx_low] + alpha * _GRIPPER_TRAJECTORY[idx_high]
+        joint_positions = (1 - alpha) * trajectory[idx_low] + alpha * trajectory[idx_high]
 
         self._data.qpos[self._joint_qpos_indices] = joint_positions
         mujoco.mj_forward(self._model, self._data)
@@ -292,8 +413,8 @@ class RobotiqGripper(_BaseGripper):
 
         # Use driver joint (index 1) as reference — it has the most range.
         driver_idx = 1
-        driver_open = _GRIPPER_TRAJECTORY[0, driver_idx]
-        driver_closed = _GRIPPER_TRAJECTORY[-1, driver_idx]
+        driver_open = self._trajectory[0, driver_idx]
+        driver_closed = self._trajectory[-1, driver_idx]
 
         if abs(driver_closed - driver_open) < 1e-6:
             return 0.0
