@@ -57,6 +57,7 @@ class CollisionChecker:
         grasp_manager: GraspManager | None = None,
         grasped_objects: frozenset[tuple[str, str]] | None = None,
         attachments: dict[str, tuple[str, np.ndarray]] | None = None,
+        extra_arm_body_names: list[str] | None = None,
     ):
         """Initialize collision checker.
 
@@ -70,6 +71,9 @@ class CollisionChecker:
                 Frozenset of ``(object_name, arm_name)`` tuples.
             attachments: Frozen attachment state for thread-safe use.
                 Dict of ``{object_name: (gripper_body_name, T_gripper_object)}``.
+            extra_arm_body_names: Additional body names (and their descendants)
+                to treat as part of the arm for collision filtering. Use for
+                welded tool bodies that aren't children in the body tree.
         """
         self.model = model
         self._grasp_manager = grasp_manager
@@ -102,6 +106,30 @@ class CollisionChecker:
             body_id = model.jnt_bodyid[joint_id]
             self._arm_body_ids.add(body_id)
             self._add_child_bodies(body_id)
+
+        # Add extra bodies (e.g., welded tool not in the body tree)
+        for name in extra_arm_body_names or []:
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid >= 0:
+                self._arm_body_ids.add(bid)
+                self._add_child_bodies(bid)
+
+        # Build grasped body ID set (root + all descendants).
+        # _is_grasped checks body names, but child bodies of grasped
+        # objects also need to be recognized as grasped.
+        # Build grasped body ID set (root + all descendants).
+        # Contacts between grasped bodies and gripper/arm are filtered
+        # as gripper-object contacts, not counted as collisions.
+        self._grasped_body_ids: set[int] = set()
+        grasped_names: set[str] = set()
+        if grasp_manager is not None:
+            grasped_names = set(grasp_manager.grasped.keys())
+        else:
+            grasped_names = {obj for obj, _ in self._grasped_objects}
+        for name in grasped_names:
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid >= 0:
+                self._grasped_body_ids.update(self._get_body_and_descendants(bid))
 
     # -- Public API (pycbirrt CollisionChecker protocol) --
 
@@ -251,7 +279,11 @@ class CollisionChecker:
         return self.data
 
     def _is_grasped(self, body_name: str) -> bool:
-        """Check if a body is grasped (works in both modes)."""
+        """Check if a body (or any ancestor) is grasped."""
+        bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+        if bid >= 0 and bid in self._grasped_body_ids:
+            return True
+        # Fallback to name-based check for backward compat
         if self._grasp_manager is not None:
             return self._grasp_manager.is_grasped(body_name)
         return any(obj == body_name for obj, _ in self._grasped_objects)

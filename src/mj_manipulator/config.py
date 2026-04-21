@@ -75,6 +75,7 @@ class ArmConfig(EntityConfig):
     tcp_offset: np.ndarray | None = None  # 4x4 SE3 from ee_site to tool center point
     ft_force_sensor: str | None = None  # MuJoCo force sensor name (3-axis)
     ft_torque_sensor: str | None = None  # MuJoCo torque sensor name (3-axis)
+    extra_arm_body_names: list[str] | None = None  # Additional bodies to treat as part of arm for collision
     planning_defaults: PlanningDefaults = field(default_factory=PlanningDefaults)
 
     def __post_init__(self):

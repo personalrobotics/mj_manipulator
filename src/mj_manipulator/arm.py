@@ -602,6 +602,7 @@ class Arm:
         # Collision checker with snapshot of current grasp state.
         # Only include objects grasped by THIS arm — objects held by other
         # arms are static obstacles, not part of this arm's robot model.
+        extra_bodies = self.config.extra_arm_body_names
         if self.grasp_manager is not None:
             arm_name = self.config.name
             grasped_objects = frozenset(
@@ -616,12 +617,14 @@ class Arm:
                 joint_names=self.config.joint_names,
                 grasped_objects=grasped_objects,
                 attachments=attachments,
+                extra_arm_body_names=extra_bodies,
             )
         else:
             collision_checker = CollisionChecker(
                 model=model,
                 data=data,
                 joint_names=self.config.joint_names,
+                extra_arm_body_names=extra_bodies,
             )
 
         # IK solver — use injected solver or a no-op stub
