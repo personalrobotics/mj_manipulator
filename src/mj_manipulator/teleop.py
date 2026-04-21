@@ -510,11 +510,10 @@ class TeleopController:
         if ik is None:
             return TeleopState.UNREACHABLE
 
-        solutions = ik.solve(pose)
+        q_current = self._arm.get_joint_positions()
+        solutions = ik.solve(pose, q_init=q_current)
         if not solutions:
             return TeleopState.UNREACHABLE
-
-        q_current = self._arm.get_joint_positions()
         q_best = self._pick_closest(solutions, q_current)
         if q_best is None:
             return TeleopState.UNREACHABLE
@@ -528,8 +527,9 @@ class TeleopController:
     ) -> np.ndarray | None:
         """Pick the IK solution closest to current config.
 
-        In physics mode and on real hardware, the PD controller / servo
-        handles velocity limiting naturally. No clamping needed.
+        Wraps continuous joint values to be within π of the current config
+        before comparing, so different wrappings of the same physical
+        configuration are treated as equivalent.
         """
         best = None
         best_dist = float("inf")
@@ -539,12 +539,41 @@ class TeleopController:
                 q = np.array(q)
             if q.size == 0:
                 continue
+            # Wrap to nearest equivalent angle for continuous joints
+            q = self._wrap_to_nearest(q, q_current)
             dist = float(np.linalg.norm(q - q_current))
             if dist < best_dist:
                 best_dist = dist
                 best = q
 
         return best
+
+    def _wrap_to_nearest(self, q: np.ndarray, q_ref: np.ndarray) -> np.ndarray:
+        """Wrap joint angles to be within π of the reference.
+
+        For continuous joints (unlimited range or range > 2π), shifts
+        by multiples of 2π to minimize distance from q_ref.
+        """
+        import mujoco
+
+        q = q.copy()
+        model = self._arm.env.model if hasattr(self._arm, "env") else None
+        if model is None:
+            return q
+
+        for i, jname in enumerate(self._arm.config.joint_names):
+            jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jname)
+            if jid < 0:
+                continue
+            # Check if joint range spans > 2π (effectively continuous)
+            rng = model.jnt_range[jid]
+            if model.jnt_limited[jid] and (rng[1] - rng[0]) < 2 * np.pi * 1.5:
+                continue  # genuinely limited joint, don't wrap
+            # Wrap to nearest equivalent
+            diff = q[i] - q_ref[i]
+            q[i] -= np.round(diff / (2 * np.pi)) * (2 * np.pi)
+
+        return q
 
     # -- Internal: twist path -------------------------------------------------
 
