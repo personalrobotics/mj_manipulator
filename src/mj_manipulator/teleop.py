@@ -505,20 +505,62 @@ class TeleopController:
     # -- Internal: pose path --------------------------------------------------
 
     def _step_pose(self, pose: np.ndarray) -> TeleopState:
-        """IK-based pose tracking."""
+        """Pose tracking via IK (analytical) or resolved-rate (numerical).
+
+        Analytical IK (EAIK): use IK solutions directly — fast, exact.
+        Numerical IK (mink): convert pose error to twist and use
+        CartesianController (Jacobian-based). Numerical IK is too slow
+        for teleop and returns solutions in wrong wrappings.
+        """
+        from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+
         ik = self._arm.ik_solver
-        if ik is None:
-            return TeleopState.UNREACHABLE
+        if ik is not None and isinstance(ik, MuJoCoEAIKSolver):
+            q_current = self._arm.get_joint_positions()
+            solutions = ik.solve(pose, q_init=q_current)
+            if not solutions:
+                return TeleopState.UNREACHABLE
+            q_best = self._pick_closest(solutions, q_current)
+            if q_best is None:
+                return TeleopState.UNREACHABLE
+            return self._check_and_commit(q_best)
 
-        q_current = self._arm.get_joint_positions()
-        solutions = ik.solve(pose, q_init=q_current)
-        if not solutions:
-            return TeleopState.UNREACHABLE
-        q_best = self._pick_closest(solutions, q_current)
-        if q_best is None:
-            return TeleopState.UNREACHABLE
+        return self._step_pose_as_twist(pose)
 
-        return self._check_and_commit(q_best)
+    def _step_pose_as_twist(self, target_pose: np.ndarray) -> TeleopState:
+        """Convert pose error to twist and track via CartesianController.
+
+        The CartesianController uses the Jacobian directly — no IK needed,
+        naturally stays near the current config, handles singularities
+        via damping.
+        """
+        ee_pose = self._arm.get_ee_pose()
+
+        # Position error
+        pos_err = target_pose[:3, 3] - ee_pose[:3, 3]
+
+        # Orientation error as axis-angle
+        R_err = target_pose[:3, :3] @ ee_pose[:3, :3].T
+        angle = np.arccos(np.clip((np.trace(R_err) - 1) / 2, -1, 1))
+        if angle < 1e-6:
+            rot_err = np.zeros(3)
+        else:
+            axis = np.array([
+                R_err[2, 1] - R_err[1, 2],
+                R_err[0, 2] - R_err[2, 0],
+                R_err[1, 0] - R_err[0, 1],
+            ]) / (2 * np.sin(angle))
+            rot_err = axis * angle
+
+        gain = 1.0
+        max_linear = 0.2
+        max_angular = 0.5
+
+        linear_vel = np.clip(gain * pos_err, -max_linear, max_linear)
+        angular_vel = np.clip(gain * rot_err, -max_angular, max_angular)
+
+        twist = np.concatenate([linear_vel, angular_vel])
+        return self._step_twist(twist)
 
     def _pick_closest(
         self,
@@ -585,9 +627,12 @@ class TeleopController:
         if result.achieved_fraction < 0.1:
             return TeleopState.UNREACHABLE
 
-        # CartesianController wrote to data.qpos — read the new positions
-        q_new = self._arm.get_joint_positions()
-        return self._check_and_commit(q_new)
+        # In physics mode, CartesianController sets the PhysicsController
+        # target via step_cartesian. The physics step (tick step 4) will
+        # apply it. Don't call _check_and_commit — it would read the
+        # unchanged qpos and overwrite the target back to current.
+        # In kinematic mode, CartesianController writes qpos directly.
+        return TeleopState.TRACKING
 
     def _get_cart_ctrl(self):
         """Lazily create CartesianController for twist input."""
