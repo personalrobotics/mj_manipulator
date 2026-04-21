@@ -443,6 +443,11 @@ class TeleopController:
             jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jname)
             bid = model.jnt_bodyid[jid]
             my_body_ids.add(bid)
+        # Add extra arm bodies (e.g., welded tool)
+        for name in self._arm.config.extra_arm_body_names or []:
+            bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+            if bid >= 0:
+                my_body_ids.add(bid)
         # Add all descendant bodies
         changed = True
         while changed:
