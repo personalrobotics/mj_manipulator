@@ -708,13 +708,16 @@ class SimContext:
             self._controller.hold_all()
 
     def reset_state(self) -> None:
-        """Deactivate teleop, abort runners, and hold at current qpos.
+        """Deactivate teleop, release grasps, abort runners, hold at current qpos.
 
         Call after modifying ``data.qpos`` (e.g. ``mj_resetDataKeyframe``)
-        so the controller, event loop, and ownership registry all agree
-        on the new state. This is the safe way to reset during interactive
-        sessions — it ensures teleop gizmos are hidden, running trajectories
-        are stopped, and the controller won't fight the new positions.
+        so the controller, event loop, ownership registry, grasp manager,
+        and grasp verifiers all agree on the new state.
+
+        This is the safe way to reset during interactive sessions — it
+        ensures teleop gizmos are hidden, running trajectories are stopped,
+        held objects are released, and the controller won't fight the new
+        positions.
 
         Typical usage::
 
@@ -728,15 +731,29 @@ class SimContext:
         # 2. Clear ownership (abort any running trajectories, release all arms)
         if self._ownership is not None:
             self._ownership.abort_all()
-            # Let one tick process the aborts so runners see them
-            # (not needed — abort_all sets flags, runners check on next advance_all)
             self._ownership.clear_all()
 
-        # 3. Tell the controller to hold at the new qpos
+        # 3. Release all grasps: clear grasp manager bookkeeping, detach
+        #    kinematic welds, and reset grasp verifiers to IDLE.
+        for arm in self._arms.values():
+            arm_name = arm.config.name
+            gm = arm.grasp_manager
+            if gm is not None:
+                for obj in list(gm.get_grasped_by(arm_name)):
+                    gm.mark_released(obj)
+                    gm.detach_object(obj)
+
+            gripper = arm.gripper
+            if gripper is not None:
+                if gripper.grasp_verifier is not None:
+                    gripper.grasp_verifier.mark_released()
+
+        # 4. Tell the controller to hold at the new qpos (includes
+        #    resetting gripper targets to open)
         if self._controller is not None:
             self._controller.hold_all()
 
-        # 4. Sync viewer to show the new state
+        # 5. Sync viewer to show the new state
         self.sync()
 
     def is_running(self) -> bool:
