@@ -748,10 +748,11 @@ class SimContext:
                 if gripper.grasp_verifier is not None:
                     gripper.grasp_verifier.mark_released()
 
-        # 4. Tell the controller to hold at the new qpos (includes
-        #    resetting gripper targets to open)
+        # 4. Defer hold to the next tick — the caller may modify qpos
+        #    after this call (e.g. setup_scene, base height changes).
+        #    Whatever qpos exists at tick-time gets captured.
         if self._controller is not None:
-            self._controller.hold_all()
+            self._controller.request_hold()
 
         # 5. Sync viewer to show the new state
         self.sync()

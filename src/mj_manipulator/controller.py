@@ -365,6 +365,11 @@ class Controller(ABC):
         # Active non-blocking trajectory runners (entity_name → TrajectoryRunner)
         self._runners: dict[str, TrajectoryRunner] = {}
 
+        # Deferred hold: when True, step() calls hold_all() before applying
+        # targets. This lets callers modify qpos after reset_state() and have
+        # the controller pick up whatever's there on the next tick.
+        self._hold_pending: bool = False
+
         # Initialize qpos/qvel to targets (prevents violent jumps on first step)
         for state in self._arms.values():
             data.qpos[state.joint_qpos_indices] = state.target_position
@@ -376,6 +381,7 @@ class Controller(ABC):
 
     def hold_all(self) -> None:
         """Update all targets (arms, entities, grippers) to current positions."""
+        self._hold_pending = False
         for state in self._arms.values():
             state.target_position = self.data.qpos[state.joint_qpos_indices].copy()
             state.target_velocity = np.zeros(len(state.actuator_ids))
@@ -387,6 +393,16 @@ class Controller(ABC):
         for name, gs in self._grippers.items():
             gs.target_ctrl = gs.ctrl_open
             self.data.ctrl[gs.actuator_id] = gs.ctrl_open
+
+    def request_hold(self) -> None:
+        """Request that the next step() captures current qpos as targets.
+
+        Use instead of :meth:`hold_all` when qpos will be modified after
+        the call (e.g. scene setup after a reset). The hold is deferred
+        to the next :meth:`step`, so whatever qpos state exists at
+        tick-time gets captured — including post-reset modifications.
+        """
+        self._hold_pending = True
 
     def set_arm_target(
         self,
@@ -415,9 +431,12 @@ class Controller(ABC):
     def step(self) -> None:
         """Apply current targets and advance one control cycle.
 
-        Delegates to :meth:`_apply_targets_and_step` which subclasses
-        implement with mode-specific stepping logic.
+        If a deferred hold is pending (from :meth:`request_hold` or
+        :meth:`reset_state`), captures current qpos as targets first.
+        Then delegates to :meth:`_apply_targets_and_step`.
         """
+        if self._hold_pending:
+            self.hold_all()
         self._apply_targets_and_step()
 
     @abstractmethod
