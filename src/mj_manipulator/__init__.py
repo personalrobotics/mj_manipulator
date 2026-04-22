@@ -27,6 +27,7 @@ from mj_manipulator.collision import CollisionChecker
 from mj_manipulator.config import (
     ArmConfig,
     EntityConfig,
+    ExecutionConfig,
     GripperPhysicsConfig,
     KinematicLimits,
     PhysicsConfig,
@@ -34,6 +35,7 @@ from mj_manipulator.config import (
     PlanningDefaults,
     RecoveryConfig,
 )
+from mj_manipulator.controller import ArmExecutor, Controller, EntityExecutor
 from mj_manipulator.executor import KinematicExecutor, PhysicsExecutor
 from mj_manipulator.grasp_manager import GraspManager
 from mj_manipulator.grasp_verifier import (
@@ -51,6 +53,7 @@ from mj_manipulator.load_signals import (
 )
 from mj_manipulator.ownership import OwnerKind, OwnershipRegistry
 from mj_manipulator.perception import SimPerceptionService
+from mj_manipulator.kinematic_controller import KinematicController
 from mj_manipulator.physics_controller import ArmPhysicsExecutor, PhysicsController
 from mj_manipulator.planning import PlanResult
 from mj_manipulator.protocols import (
@@ -113,12 +116,16 @@ __all__ = [
     "FrankaGripper",
     # Collision checking
     "CollisionChecker",
-    # Executors
+    # Executors (standalone, no-event-loop usage)
     "KinematicExecutor",
     "PhysicsExecutor",
-    # Physics controller (simulation)
+    # Controller hierarchy
+    "Controller",
     "PhysicsController",
-    "ArmPhysicsExecutor",
+    "KinematicController",
+    "ArmExecutor",
+    "EntityExecutor",
+    "ArmPhysicsExecutor",  # backwards compat alias for ArmExecutor
     # Robot protocol and base class
     "ManipulationRobot",
     "RobotBase",
@@ -147,6 +154,7 @@ __all__ = [
     "KinematicLimits",
     "PlanningDefaults",
     "PhysicsConfig",
+    "ExecutionConfig",
     "PhysicsExecutionConfig",
     "GripperPhysicsConfig",
     "RecoveryConfig",
