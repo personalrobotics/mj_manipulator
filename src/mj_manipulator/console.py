@@ -178,6 +178,7 @@ def start_console(
                         request_abort_fn=robot.request_abort,
                         event_loop=event_loop,
                         ownership=ctx.ownership,
+                        enable_ghost=bool(gripper_prefix),
                     )
                     panel.setup(gui, viser_viewer)
                     viser_viewer._panels.append(panel)
