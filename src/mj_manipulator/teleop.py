@@ -642,18 +642,44 @@ class TeleopController:
     # -- Internal: twist path -------------------------------------------------
 
     def _step_twist(self, twist: np.ndarray) -> TeleopState:
-        """CartesianController-based twist tracking."""
+        """CartesianController-based twist tracking.
+
+        CartesianController sets targets via step_cartesian — we must
+        NOT call _check_and_commit (which would double-step and overwrite
+        the target). Instead, check collisions after the step and revert
+        if in reject mode.
+        """
+        # Snapshot position before the step (for revert on reject)
+        q_before = self._arm.get_joint_positions().copy()
+
         ctrl = self._get_cart_ctrl()
         result = ctrl.step(twist, dt=self._config.twist_dt)
 
         if result.achieved_fraction < 0.1:
             return TeleopState.UNREACHABLE
 
-        # In physics mode, CartesianController sets the PhysicsController
-        # target via step_cartesian. The physics step (tick step 4) will
-        # apply it. Don't call _check_and_commit — it would read the
-        # unchanged qpos and overwrite the target back to current.
-        # In kinematic mode, CartesianController writes qpos directly.
+        # Check collisions at the new config
+        q_after = q_before + result.joint_velocities * self._config.twist_dt
+        in_collision = False
+        cc = self._get_collision_checker()
+        if cc is not None:
+            in_collision = not cc.is_valid(q_after)
+        if not in_collision:
+            in_collision = self._check_live_collisions(q_after)
+
+        if in_collision:
+            mode = self._config.safety_mode
+            if mode == SafetyMode.REJECT:
+                # Revert: send the pre-step position so the controller
+                # doesn't apply the colliding config on the next tick.
+                arm_name = self._arm.config.name
+                self._ctx.step_cartesian(arm_name, q_before)
+                # Reset CartesianController's internal reference so it
+                # doesn't keep integrating past the collision boundary.
+                ctrl._q_ref = q_before.copy()
+                return TeleopState.UNREACHABLE
+            return TeleopState.TRACKING_COLLISION
+
         return TeleopState.TRACKING
 
     def _get_cart_ctrl(self):
