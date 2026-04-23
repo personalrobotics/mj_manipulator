@@ -448,6 +448,14 @@ class TeleopController:
             bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
             if bid >= 0:
                 my_body_ids.add(bid)
+        # Add grasped object bodies (held tool, can, etc.)
+        gm = self._arm.grasp_manager
+        if gm is not None:
+            arm_name = self._arm.config.name
+            for obj_name in gm.get_grasped_by(arm_name):
+                bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, obj_name)
+                if bid >= 0:
+                    my_body_ids.add(bid)
         # Add all descendant bodies
         changed = True
         while changed:
@@ -493,11 +501,23 @@ class TeleopController:
         return in_collision
 
     def _get_collision_checker(self):
-        """Lazily create a collision checker from the arm's planner."""
+        """Lazily create a live-mode collision checker.
+
+        Uses ``grasp_manager`` for live grasp state so held objects are
+        always included in collision checks — no stale cache even when
+        the user picks up an object after teleop is activated.
+        """
         if self._collision_checker is None:
             try:
-                planner = self._arm.create_planner()
-                self._collision_checker = planner.collision
+                from mj_manipulator.collision import CollisionChecker
+
+                self._collision_checker = CollisionChecker(
+                    model=self._arm.env.model,
+                    data=self._arm.env.data,
+                    joint_names=self._arm.config.joint_names,
+                    grasp_manager=self._arm.grasp_manager,
+                    extra_arm_body_names=self._arm.config.extra_arm_body_names,
+                )
             except Exception:
                 return None
         return self._collision_checker
