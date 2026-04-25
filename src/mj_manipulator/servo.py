@@ -163,23 +163,25 @@ def servo_to_pose(
                 last_progress_pos = ee_pose[:3, 3].copy()
                 last_progress_check = now
 
-            # Compute intermediate target with speed profile.
-            # Position: step toward target at profiled speed.
-            # Orientation: use the final target orientation — TeleopController
-            # handles the interpolation via velocity clamping.
+            # Modulate TeleopController speed based on distance.
+            # The speed profile controls how fast the arm is allowed to
+            # move — TeleopController's velocity clamping does the rest.
+            # Both position and orientation are handled proportionally
+            # by TeleopController's internal twist computation.
             lin_speed = speed_profile.linear_speed(pos_err_norm)
-            step_distance = lin_speed * dt
-            if pos_err_norm > 1e-8:
-                direction = pos_err / pos_err_norm
-                step_pos = ee_pose[:3, 3] + direction * min(step_distance, pos_err_norm)
+            limits = getattr(arm.config, "kinematic_limits", None)
+            if limits is not None:
+                # Scale velocity limits by speed fraction
+                max_speed = speed_profile.max_linear
+                speed_fraction = lin_speed / max_speed if max_speed > 0 else 1.0
+                ctrl._config.max_joint_step = 0.05 * speed_fraction
             else:
-                step_pos = target[:3, 3]
+                ctrl._config.max_joint_step = lin_speed * dt
 
-            step_pose = target.copy()
-            step_pose[:3, 3] = step_pos
-
-            # Drive TeleopController — collision check + velocity clamp
-            ctrl.set_target_pose(step_pose)
+            # Pass the full target pose — TeleopController handles
+            # proportional control for both position and orientation,
+            # collision checking, and velocity clamping.
+            ctrl.set_target_pose(target)
             state = ctrl.step()
 
             if state == TeleopState.UNREACHABLE:
