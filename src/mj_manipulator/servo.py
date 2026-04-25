@@ -74,6 +74,7 @@ def servo_to_pose(
     ft_threshold: ForceThresholds | None = None,
     position_tol: float = 0.005,
     rotation_tol: float = 0.05,
+    ignore_orientation: bool = False,
     timeout: float = 10.0,
 ) -> Outcome:
     """Cartesian servo to a target pose with deceleration and F/T monitoring.
@@ -96,6 +97,10 @@ def servo_to_pose(
             monitoring.
         position_tol: Stop when position error < this (meters).
         rotation_tol: Stop when rotation error < this (radians).
+        ignore_orientation: If True, only track position — don't
+            rotate to match the target orientation. Used for mouth
+            approach where the fork orientation is set by the arm
+            configuration, not by the mouth frame.
         timeout: Maximum duration (seconds).
 
     Returns:
@@ -113,13 +118,20 @@ def servo_to_pose(
         # Current EE pose
         ee_pose = arm.get_ee_pose()
         pos_err = target[:3, 3] - ee_pose[:3, 3]
-        rot_err = _rotation_error(target[:3, :3], ee_pose[:3, :3])
-
         pos_err_norm = float(np.linalg.norm(pos_err))
-        rot_err_norm = float(np.linalg.norm(rot_err))
+
+        if ignore_orientation:
+            rot_err = np.zeros(3)
+            rot_err_norm = 0.0
+        else:
+            rot_err = _rotation_error(target[:3, :3], ee_pose[:3, :3])
+            rot_err_norm = float(np.linalg.norm(rot_err))
 
         # Convergence check
-        if pos_err_norm < position_tol and rot_err_norm < rotation_tol:
+        converged = pos_err_norm < position_tol
+        if not ignore_orientation:
+            converged = converged and rot_err_norm < rotation_tol
+        if converged:
             return success(
                 position_error_m=pos_err_norm,
                 rotation_error_rad=rot_err_norm,
@@ -140,10 +152,13 @@ def servo_to_pose(
 
         # Compute twist with speed profile
         lin_speed = speed_profile.linear_speed(pos_err_norm)
-        ang_speed = speed_profile.angular_speed(pos_err_norm)
-
         v = pos_err * min(1.0, lin_speed / (pos_err_norm + 1e-8))
-        w = rot_err * min(1.0, ang_speed / (rot_err_norm + 1e-8))
+
+        if ignore_orientation:
+            w = np.zeros(3)
+        else:
+            ang_speed = speed_profile.angular_speed(pos_err_norm)
+            w = rot_err * min(1.0, ang_speed / (rot_err_norm + 1e-8))
 
         # Convert twist to joint targets via Jacobian
         q_current = arm.get_joint_positions()
