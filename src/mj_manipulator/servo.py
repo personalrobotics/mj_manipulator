@@ -163,13 +163,12 @@ def servo_to_pose(
                 last_progress_check = now
 
             # Set Cartesian speed limit from the speed profile.
-            # This is the real safety guarantee — the EE tip will
-            # never exceed this speed regardless of arm configuration.
+            # TeleopController computes the twist internally from the
+            # full 6D pose error — both position and orientation are
+            # corrected proportionally. max_cartesian_speed limits
+            # how fast the EE moves.
             ctrl._config.max_cartesian_speed = speed_profile.linear_speed(pos_err_norm)
 
-            # Pass the full target pose — TeleopController handles
-            # proportional control for both position and orientation,
-            # collision checking, and velocity clamping.
             ctrl.set_target_pose(target)
             state = ctrl.step()
 
