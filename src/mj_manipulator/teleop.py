@@ -371,12 +371,25 @@ class TeleopController:
 
     # -- Internal: safety check -----------------------------------------------
 
-    def _check_and_commit(self, q_target: np.ndarray) -> tuple[TeleopState, np.ndarray]:
+    def _check_and_commit(
+        self,
+        q_target: np.ndarray,
+        q_ref: np.ndarray | None = None,
+    ) -> tuple[TeleopState, np.ndarray]:
         """Check collision safety and commit joint targets.
 
         Shared by both pose and twist paths. Applies the safety mode:
         - ALLOW: commit and return TRACKING_COLLISION if in collision
         - REJECT: don't commit if in collision, return UNREACHABLE
+
+        Args:
+            q_target: Desired joint configuration.
+            q_ref: Reference position for delta computation. If provided,
+                ``delta = q_target - q_ref`` (forward step only). If None,
+                uses ``data.qpos`` (includes PD tracking lag in physics
+                mode). The twist path passes ``_q_ref`` here so the
+                velocity clamp operates on the intended step, not the
+                accumulated lag.
 
         Returns:
             (state, q_committed) — the state and the actual joint config
@@ -400,11 +413,11 @@ class TeleopController:
             return TeleopState.UNREACHABLE, q_target
 
         # Clamp per-joint position step to the arm's velocity limits.
-        # This ensures the position target and velocity feedforward are
-        # consistent — both respect the same limits. The max step per
-        # joint per tick is vel_limit[j] * dt.
-        q_current = self._arm.get_joint_positions()
-        delta = q_target - q_current
+        # When q_ref is provided (twist path), delta is the forward step
+        # only — not polluted by PD tracking lag. This lets physics-mode
+        # teleop/servo achieve the commanded Cartesian speed.
+        q_base = q_ref if q_ref is not None else self._arm.get_joint_positions()
+        delta = q_target - q_base
         dt = self._config.twist_dt
         limits = getattr(self._arm.config, "kinematic_limits", None)
         if limits is not None:
@@ -416,7 +429,7 @@ class TeleopController:
             max_component = float(np.max(np.abs(delta)))
             if max_component > max_step:
                 delta = delta * (max_step / max_component)
-        q_target = q_current + delta
+        q_target = q_base + delta
 
         # Velocity feedforward — now guaranteed within joint limits
         # because delta was already clamped to vel_limit * dt above.
@@ -434,7 +447,7 @@ class TeleopController:
                 scale = max_cart / ee_linear_speed
                 qd = qd * scale
                 delta = qd * dt
-                q_target = q_current + delta
+                q_target = q_base + delta
 
         arm_name = self._arm.config.name
         self._ctx.step_cartesian(arm_name, q_target, qd)
@@ -709,8 +722,10 @@ class TeleopController:
         )
 
         # Check and commit through the unified path (collision check,
-        # velocity clamp, step_cartesian). Same path as EAIK pose.
-        state, q_committed = self._check_and_commit(q_candidate)
+        # velocity clamp, step_cartesian). Pass _q_ref so the velocity
+        # clamp operates on the forward step, not the PD lag from
+        # data.qpos. This lets physics mode achieve commanded speed.
+        state, q_committed = self._check_and_commit(q_candidate, q_ref=ctrl._q_ref)
 
         # Sync _q_ref to what was actually committed (after velocity +
         # Cartesian speed clamping). Without this, _q_ref marches ahead
