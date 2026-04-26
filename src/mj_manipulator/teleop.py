@@ -84,8 +84,10 @@ class TeleopConfig:
     guarantee Cartesian speed bounds because the Jacobian varies with
     configuration."""
 
-    twist_dt: float = 0.008
-    """Timestep for CartesianController twist integration."""
+    twist_dt: float | None = None
+    """Timestep for twist integration. If None (default), uses
+    ctx.control_dt from the execution context. Only set explicitly
+    for testing."""
 
     idle_timeout: float = 0.5
     """Seconds without input before transitioning to IDLE."""
@@ -131,6 +133,12 @@ class TeleopController:
         self._arm = arm
         self._ctx = context
         self._config = config or TeleopConfig()
+
+        # Resolve twist_dt from context if not explicitly set.
+        # This ensures teleop uses the same timestep as the controller
+        # (0.008s for physics, 0.004s for kinematic).
+        if self._config.twist_dt is None:
+            self._config.twist_dt = getattr(context, "control_dt", 0.008)
 
         self._state = TeleopState.IDLE
         self._active = False
