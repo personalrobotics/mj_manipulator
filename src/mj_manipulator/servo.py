@@ -220,11 +220,19 @@ def ft_guarded_move(
         timeout = duration * 1.5
 
     ctrl = _make_teleop(arm, ctx)
-    dt = ctx.control_dt
     t0 = time.monotonic()
 
+    # Running target: starts at current pose, integrates at twist velocity.
+    # TeleopController tracks this moving target — gets collision checking,
+    # velocity clamping, and 6D pose tracking for free.
+    running_target = arm.get_ee_pose().copy()
+    lin_speed = float(np.linalg.norm(twist[:3]))
+
+    # Set Cartesian speed limit to the twist magnitude
+    ctrl._config.max_cartesian_speed = lin_speed if lin_speed > 1e-6 else None
+
     # Progress tracking
-    has_linear = float(np.linalg.norm(twist[:3])) > 1e-4
+    has_linear = lin_speed > 1e-4
     progress_check_interval = 0.5
     last_progress_check = t0
     last_progress_pos = arm.get_ee_pose()[:3, 3].copy()
@@ -255,14 +263,22 @@ def ft_guarded_move(
             if elapsed >= duration:
                 return success(contact=False, elapsed_s=elapsed)
 
-            # Compute next target pose by integrating twist
-            ee_pose = arm.get_ee_pose()
-            step_pose = ee_pose.copy()
-            step_pose[:3, 3] += twist[:3] * dt
-            # TODO: integrate angular twist for rotation
+            # Advance the running target by twist * dt.
+            # Position integrates linearly. Orientation integrates via
+            # axis-angle (twist[3:] is angular velocity in world frame).
+            dt_step = ctx.control_dt
+            running_target[:3, 3] += twist[:3] * dt_step
+            ang = twist[3:] * dt_step
+            ang_norm = float(np.linalg.norm(ang))
+            if ang_norm > 1e-8:
+                # Rodrigues rotation
+                axis = ang / ang_norm
+                K = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+                R_step = np.eye(3) + np.sin(ang_norm) * K + (1 - np.cos(ang_norm)) * K @ K
+                running_target[:3, :3] = R_step @ running_target[:3, :3]
 
-            # Drive TeleopController
-            ctrl.set_target_pose(step_pose)
+            # Drive TeleopController with the running target
+            ctrl.set_target_pose(running_target)
             state = ctrl.step()
 
             if state == TeleopState.UNREACHABLE:
