@@ -371,15 +371,16 @@ class TeleopController:
 
     # -- Internal: safety check -----------------------------------------------
 
-    def _check_and_commit(self, q_target: np.ndarray) -> TeleopState:
+    def _check_and_commit(self, q_target: np.ndarray) -> tuple[TeleopState, np.ndarray]:
         """Check collision safety and commit joint targets.
 
         Shared by both pose and twist paths. Applies the safety mode:
         - ALLOW: commit and return TRACKING_COLLISION if in collision
         - REJECT: don't commit if in collision, return UNREACHABLE
 
-        Checks both per-arm collisions (forked env) and arm-arm
-        collisions (live data via is_arm_in_collision).
+        Returns:
+            (state, q_committed) — the state and the actual joint config
+            that was committed (after velocity + Cartesian speed clamping).
         """
         mode = self._config.safety_mode
         in_collision = False
@@ -396,7 +397,7 @@ class TeleopController:
             in_collision = self._check_live_collisions(q_target)
 
         if in_collision and mode == SafetyMode.REJECT:
-            return TeleopState.UNREACHABLE
+            return TeleopState.UNREACHABLE, q_target
 
         # Clamp per-joint position step to the arm's velocity limits.
         # This ensures the position target and velocity feedforward are
@@ -439,8 +440,8 @@ class TeleopController:
         self._ctx.step_cartesian(arm_name, q_target, qd)
 
         if in_collision:
-            return TeleopState.TRACKING_COLLISION
-        return TeleopState.TRACKING
+            return TeleopState.TRACKING_COLLISION, q_target
+        return TeleopState.TRACKING, q_target
 
     def _check_live_collisions(self, q_target: np.ndarray) -> bool:
         """Check for arm-arm collisions using live MuJoCo data.
@@ -564,7 +565,8 @@ class TeleopController:
             q_best = self._pick_closest(solutions, q_current)
             if q_best is None:
                 return TeleopState.UNREACHABLE
-            return self._check_and_commit(q_best)
+            state, _ = self._check_and_commit(q_best)
+            return state
 
         return self._step_pose_as_twist(pose)
 
@@ -708,14 +710,14 @@ class TeleopController:
 
         # Check and commit through the unified path (collision check,
         # velocity clamp, step_cartesian). Same path as EAIK pose.
-        state = self._check_and_commit(q_candidate)
+        state, q_committed = self._check_and_commit(q_candidate)
 
-        # Update CartesianController state only if the step was accepted.
-        # If rejected (UNREACHABLE), _q_ref stays at the last safe
-        # position so the next twist doesn't integrate past the boundary.
+        # Sync _q_ref to what was actually committed (after velocity +
+        # Cartesian speed clamping). Without this, _q_ref marches ahead
+        # at the unclamped rate and the next step's delta is too large.
         if state != TeleopState.UNREACHABLE:
             ctrl._q_dot_prev = result.joint_velocities
-            ctrl._q_ref = q_candidate
+            ctrl._q_ref = q_committed
 
         return state
 
