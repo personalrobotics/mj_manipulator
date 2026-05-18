@@ -69,8 +69,12 @@ def jaco2_setup():
     env = Environment.from_model(model, data)
 
     JNT = [
-        "j2n6s200_joint_1", "j2n6s200_joint_2", "j2n6s200_joint_3",
-        "j2n6s200_joint_4", "j2n6s200_joint_5", "j2n6s200_joint_6",
+        "j2n6s200_joint_1",
+        "j2n6s200_joint_2",
+        "j2n6s200_joint_3",
+        "j2n6s200_joint_4",
+        "j2n6s200_joint_5",
+        "j2n6s200_joint_6",
     ]
     joint_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in JNT]
     qpos_indices = np.array([model.jnt_qposadr[j] for j in joint_ids], dtype=int)
@@ -237,13 +241,20 @@ class TestFactoryDispatch:
         from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
 
         JNT = [
-            "j2n6s200_joint_1", "j2n6s200_joint_2", "j2n6s200_joint_3",
-            "j2n6s200_joint_4", "j2n6s200_joint_5", "j2n6s200_joint_6",
+            "j2n6s200_joint_1",
+            "j2n6s200_joint_2",
+            "j2n6s200_joint_3",
+            "j2n6s200_joint_4",
+            "j2n6s200_joint_5",
+            "j2n6s200_joint_6",
         ]
         cfg = ArmConfig(
-            name="jaco2", entity_type="arm", joint_names=JNT,
+            name="jaco2",
+            entity_type="arm",
+            joint_names=JNT,
             kinematic_limits=KinematicLimits(
-                velocity=np.full(6, 1.5), acceleration=np.full(6, 3.0),
+                velocity=np.full(6, 1.5),
+                acceleration=np.full(6, 3.0),
             ),
             ee_site="ee_site",
             planning_defaults=PlanningDefaults(),
@@ -260,13 +271,20 @@ class TestFactoryDispatch:
         from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
 
         JNT = [
-            "j2n6s200_joint_1", "j2n6s200_joint_2", "j2n6s200_joint_3",
-            "j2n6s200_joint_4", "j2n6s200_joint_5", "j2n6s200_joint_6",
+            "j2n6s200_joint_1",
+            "j2n6s200_joint_2",
+            "j2n6s200_joint_3",
+            "j2n6s200_joint_4",
+            "j2n6s200_joint_5",
+            "j2n6s200_joint_6",
         ]
         cfg = ArmConfig(
-            name="jaco2", entity_type="arm", joint_names=JNT,
+            name="jaco2",
+            entity_type="arm",
+            joint_names=JNT,
             kinematic_limits=KinematicLimits(
-                velocity=np.full(6, 1.5), acceleration=np.full(6, 3.0),
+                velocity=np.full(6, 1.5),
+                acceleration=np.full(6, 3.0),
             ),
             ee_site="ee_site",
             planning_defaults=PlanningDefaults(),
@@ -282,13 +300,20 @@ class TestFactoryDispatch:
         from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
 
         JNT = [
-            "j2n6s200_joint_1", "j2n6s200_joint_2", "j2n6s200_joint_3",
-            "j2n6s200_joint_4", "j2n6s200_joint_5", "j2n6s200_joint_6",
+            "j2n6s200_joint_1",
+            "j2n6s200_joint_2",
+            "j2n6s200_joint_3",
+            "j2n6s200_joint_4",
+            "j2n6s200_joint_5",
+            "j2n6s200_joint_6",
         ]
         cfg = ArmConfig(
-            name="jaco2", entity_type="arm", joint_names=JNT,
+            name="jaco2",
+            entity_type="arm",
+            joint_names=JNT,
             kinematic_limits=KinematicLimits(
-                velocity=np.full(6, 1.5), acceleration=np.full(6, 3.0),
+                velocity=np.full(6, 1.5),
+                acceleration=np.full(6, 3.0),
             ),
             ee_site="ee_site",
             planning_defaults=PlanningDefaults(),

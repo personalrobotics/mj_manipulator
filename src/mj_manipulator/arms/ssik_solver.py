@@ -100,8 +100,7 @@ class MuJoCoSSIKSolver:
     ):
         if not hasattr(ssik_module, "solve") or not hasattr(ssik_module, "fk"):
             raise TypeError(
-                f"ssik_module {ssik_module!r} must expose .solve and .fk "
-                f"(see ssik artifact modules in ssik.prebuilt)."
+                f"ssik_module {ssik_module!r} must expose .solve and .fk (see ssik artifact modules in ssik.prebuilt)."
             )
 
         self._mod = ssik_module
@@ -117,8 +116,7 @@ class MuJoCoSSIKSolver:
         dof = int(getattr(ssik_module, "DOF"))
         if len(self._joint_qpos_indices) != dof:
             raise ValueError(
-                f"ssik artifact has DOF={dof} but joint_qpos_indices has "
-                f"length {len(self._joint_qpos_indices)}."
+                f"ssik artifact has DOF={dof} but joint_qpos_indices has length {len(self._joint_qpos_indices)}."
             )
 
         # Compute the static frame offset between ssik's EE_LINK and the
