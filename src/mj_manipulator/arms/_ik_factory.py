@@ -68,10 +68,7 @@ def resolve_ik_solver(
 
     if with_ik == "ssik":
         if ssik_module is None:
-            raise ValueError(
-                "with_ik='ssik' requires an ssik_module (e.g. "
-                "ssik.prebuilt.<arm>_ik). Got None."
-            )
+            raise ValueError("with_ik='ssik' requires an ssik_module (e.g. ssik.prebuilt.<arm>_ik). Got None.")
         return _make_ssik(arm, ssik_module)
 
     if with_ik == "mink":
@@ -93,8 +90,7 @@ def resolve_ik_solver(
             return ssik
 
     logger.info(
-        "EAIK has no decomposition for '%s' and no ssik artifact wired; "
-        "falling back to mink numerical IK.",
+        "EAIK has no decomposition for '%s' and no ssik artifact wired; falling back to mink numerical IK.",
         arm.config.name,
     )
     return _make_mink(arm)
