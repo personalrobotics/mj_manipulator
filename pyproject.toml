@@ -10,7 +10,7 @@ authors = [
 maintainers = [
     {name = "Siddhartha Srinivasa", email = "siddhartha.srinivasa@gmail.com"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "mujoco",
@@ -22,6 +22,7 @@ dependencies = [
     "eaik",
     "mink>=1.1.0",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
+    "ssik>=1.1.0",
 ]
 
 [tool.uv.sources]

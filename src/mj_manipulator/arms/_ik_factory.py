@@ -3,9 +3,12 @@
 
 """Shared logic for resolving IK solvers in arm factories.
 
-Handles the ``with_ik`` parameter (``"auto"`` / ``"eaik"`` / ``"mink"``
-/ ``"none"`` / bool) and the EAIK → mink fallback when EAIK has no
-known decomposition for the arm's kinematics.
+Handles the ``with_ik`` parameter (``"auto"`` / ``"eaik"`` / ``"ssik"`` /
+``"mink"`` / ``"none"`` / bool) and the EAIK → ssik → mink fallback
+chain: EAIK is preferred where it has an analytical decomposition,
+ssik picks up arms whose geometry EAIK refuses (non-Pieper 6R, every
+7R class), and mink is the last-resort numerical fallback for arms
+neither analytical solver covers (or when no ssik artifact is wired).
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # The union type accepted by all arm factories.
-IKMode = Literal["auto", "eaik", "mink", "none"] | bool
+IKMode = Literal["auto", "eaik", "ssik", "mink", "none"] | bool
 
 
 def resolve_ik_solver(
@@ -29,6 +32,7 @@ def resolve_ik_solver(
     *,
     fixed_joint_index: int | None = None,
     n_discretizations: int = 16,
+    ssik_module=None,
 ) -> "IKSolver | None":
     """Build the right IK solver for an arm based on ``with_ik``.
 
@@ -37,13 +41,18 @@ def resolve_ik_solver(
 
     Args:
         arm: A bare Arm (no IK yet) — used to read joint indices/limits.
-        with_ik: ``"auto"`` (default), ``"eaik"``, ``"mink"``, ``"none"``,
-            or bool for backward compat (``True`` → ``"auto"``).
+        with_ik: ``"auto"`` (default), ``"eaik"``, ``"ssik"``, ``"mink"``,
+            ``"none"``, or bool for backward compat (``True`` → ``"auto"``).
         fixed_joint_index: For EAIK on 7-DOF arms, which joint to lock.
         n_discretizations: Discretization count for EAIK on 7-DOF arms.
+        ssik_module: Per-arm ``ssik`` artifact module (e.g.
+            ``ssik.prebuilt.jaco2_ik``). Required when ``with_ik="ssik"``
+            or whenever the ``"auto"`` chain reaches the ssik step;
+            ``None`` skips ssik in ``"auto"`` and falls through to mink.
 
     Returns:
-        An IKSolver, or None if ``with_ik="none"`` or both solvers fail.
+        An IKSolver, or None if ``with_ik="none"`` or all attempted
+        solvers fail.
     """
     # Normalize bool → string.
     if with_ik is True:
@@ -57,16 +66,35 @@ def resolve_ik_solver(
     if with_ik == "eaik":
         return _make_eaik(arm, fixed_joint_index, n_discretizations)
 
+    if with_ik == "ssik":
+        if ssik_module is None:
+            raise ValueError(
+                "with_ik='ssik' requires an ssik_module (e.g. "
+                "ssik.prebuilt.<arm>_ik). Got None."
+            )
+        return _make_ssik(arm, ssik_module)
+
     if with_ik == "mink":
         return _make_mink(arm)
 
-    # "auto": try EAIK, fall back to mink.
+    # "auto": try EAIK → ssik → mink in order.
     eaik = _try_eaik(arm, fixed_joint_index, n_discretizations)
     if eaik is not None:
+        logger.debug("Using EAIK analytical IK for '%s'.", arm.config.name)
         return eaik
 
+    if ssik_module is not None:
+        ssik = _try_ssik(arm, ssik_module)
+        if ssik is not None:
+            logger.info(
+                "EAIK has no decomposition for '%s'; using ssik analytical IK.",
+                arm.config.name,
+            )
+            return ssik
+
     logger.info(
-        "EAIK has no known decomposition for '%s'; falling back to mink numerical IK.",
+        "EAIK has no decomposition for '%s' and no ssik artifact wired; "
+        "falling back to mink numerical IK.",
         arm.config.name,
     )
     return _make_mink(arm)
@@ -120,6 +148,33 @@ def _try_eaik(arm, fixed_joint_index, n_discretizations):
             return None
 
     return solver
+
+
+def _make_ssik(arm, ssik_module):
+    from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
+
+    env = arm.env
+    first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
+    base_body_id = int(env.model.body_parentid[first_joint_body])
+
+    return MuJoCoSSIKSolver(
+        ssik_module=ssik_module,
+        model=env.model,
+        data=env.data,
+        joint_qpos_indices=arm.joint_qpos_indices,
+        ee_site_id=arm.ee_site_id,
+        base_body_id=base_body_id,
+        joint_limits=arm.get_joint_limits(),
+    )
+
+
+def _try_ssik(arm, ssik_module):
+    """Try ssik — return solver if construction succeeds, else None."""
+    try:
+        return _make_ssik(arm, ssik_module)
+    except Exception as e:
+        logger.debug("ssik construction failed for '%s': %s", arm.config.name, e)
+        return None
 
 
 def _make_mink(arm):
