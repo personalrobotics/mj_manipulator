@@ -205,7 +205,13 @@ class MuJoCoEAIKSolver:
             # Standard 6-DOF: create robot once
             self._robot = HPRobot(self._H, self._P)
             if not self._robot.hasKnownDecomposition():
-                logger.warning(
+                # Demoted from WARNING to DEBUG: the factory's _try_eaik
+                # also checks hasKnownDecomposition() and falls through to
+                # ssik (or mink), so the user-facing "EAIK refused; using
+                # ssik instead" message comes from the factory at INFO
+                # level — emitting a WARNING here too is duplicated noise
+                # that fires on every ADA() / Geodude() construction.
+                logger.debug(
                     "EAIK has no known decomposition for this arm: %s",
                     self._robot.getKinematicFamily(),
                 )
