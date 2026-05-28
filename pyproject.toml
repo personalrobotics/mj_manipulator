@@ -30,6 +30,7 @@ mj-environment = { workspace = true }
 pycbirrt = { workspace = true }
 tsr = { workspace = true }
 prl-assets = { workspace = true }
+mj-viser = { workspace = true }
 
 [project.optional-dependencies]
 bt = [
@@ -38,6 +39,8 @@ bt = [
 console = [
     "ipython>=8.0",
     "mj-manipulator[bt]",
+    "viser>=1.0",
+    "mj-viser @ git+https://github.com/personalrobotics/mj_viser.git",
 ]
 dev = [
     "pytest",
