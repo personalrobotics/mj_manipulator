@@ -106,6 +106,26 @@ class TeleopFrame:
     gripper_position: float
 
 
+def _is_analytical_ik(ik) -> bool:
+    """True iff ``ik`` returns IK solutions in O(1) and is safe to call
+    every teleop tick.
+
+    The pose dispatch in :meth:`TeleopController._step_pose` uses this
+    to choose between the fast analytical path (one ``ik.solve`` call
+    per tick) and the Jacobian-based ``_step_pose_as_twist`` fallback.
+    Numerical solvers (mink) must go through the fallback — calling
+    them per tick is both too slow and returns solutions in wrappings
+    incompatible with teleop tracking.
+
+    Lazy-imports the concrete solver classes so unrelated callers don't
+    pay for eaik/ssik import unless teleop is exercised.
+    """
+    from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+    from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
+
+    return isinstance(ik, (MuJoCoEAIKSolver, MuJoCoSSIKSolver))
+
+
 class TeleopController:
     """Unified teleop controller with pose and twist inputs.
 
@@ -582,15 +602,13 @@ class TeleopController:
     def _step_pose(self, pose: np.ndarray) -> TeleopState:
         """Pose tracking via IK (analytical) or resolved-rate (numerical).
 
-        Analytical IK (EAIK): use IK solutions directly — fast, exact.
+        Analytical IK (EAIK or ssik): use IK solutions directly — fast, exact.
         Numerical IK (mink): convert pose error to twist and use
         CartesianController (Jacobian-based). Numerical IK is too slow
         for teleop and returns solutions in wrong wrappings.
         """
-        from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
-
         ik = self._arm.ik_solver
-        if ik is not None and isinstance(ik, MuJoCoEAIKSolver):
+        if ik is not None and _is_analytical_ik(ik):
             q_current = self._arm.get_joint_positions()
             solutions = ik.solve(pose, q_init=q_current)
             if not solutions:

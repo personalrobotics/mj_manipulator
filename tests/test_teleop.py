@@ -427,3 +427,38 @@ class TestSafetyModes:
         frames = ctrl.stop_recording()
 
         assert len(frames) == 1  # TRACKING_COLLISION frames are recorded
+
+
+class TestAnalyticalIKDispatch:
+    """Regression: _step_pose must route ssik through the analytical path.
+
+    Pre-fix, only MuJoCoEAIKSolver was recognized as analytical. JACO 2
+    (which uses MuJoCoSSIKSolver) silently fell through to the Jacobian
+    fallback, which can't keep up with ft_guarded_move and reports
+    "ft_guarded_move:no_progress" — see ada_mj feed_bite acquire_food.
+    """
+
+    def test_eaik_is_analytical(self):
+        from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+        from mj_manipulator.teleop import _is_analytical_ik
+
+        assert _is_analytical_ik(MuJoCoEAIKSolver.__new__(MuJoCoEAIKSolver))
+
+    def test_ssik_is_analytical(self):
+        pytest.importorskip("ssik")
+        from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
+        from mj_manipulator.teleop import _is_analytical_ik
+
+        assert _is_analytical_ik(MuJoCoSSIKSolver.__new__(MuJoCoSSIKSolver))
+
+    def test_mink_is_not_analytical(self):
+        pytest.importorskip("mink")
+        from mj_manipulator.arms.mink_solver import MinkIKSolver
+        from mj_manipulator.teleop import _is_analytical_ik
+
+        assert not _is_analytical_ik(MinkIKSolver.__new__(MinkIKSolver))
+
+    def test_none_is_not_analytical(self):
+        from mj_manipulator.teleop import _is_analytical_ik
+
+        assert not _is_analytical_ik(None)
