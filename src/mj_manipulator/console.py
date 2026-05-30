@@ -35,6 +35,8 @@ def start_console(
     robot_name: str = "Robot",
     extra_ns: dict | None = None,
     panel_setup: Callable | None = None,
+    grasp_primitives: bool = True,
+    extra_banner: str | None = None,
 ) -> None:
     """Launch an interactive IPython console for a manipulation robot.
 
@@ -50,12 +52,17 @@ def start_console(
         extra_ns: Additional entries for the IPython namespace.
         panel_setup: Optional callback(gui, viewer, robot, event_loop, tabs)
             to add robot-specific panels (chat, sensors, HUD, etc.).
+        grasp_primitives: If True, inject pickup/place/go_home into the
+            namespace and advertise them in the banner. Set False for robots
+            without a gripper (e.g. a welded-tool feeding robot), where these
+            primitives don't apply.
+        extra_banner: Optional command lines inserted into the banner (after
+            the grasp primitives, before E-Stop), letting a caller advertise
+            robot- or demo-specific commands.
     """
     import numpy as np
     from IPython.terminal.embed import InteractiveShellEmbed
     from IPython.terminal.prompts import Prompts, Token
-
-    from mj_manipulator.primitives import go_home, pickup, place
 
     mode = "physics" if physics else "kinematic"
 
@@ -81,12 +88,15 @@ def start_console(
     user_ns: dict = {
         "robot": robot,
         "np": np,
-        "pickup": lambda target=None, **kw: pickup(robot, target, **kw),
-        "place": lambda dest=None, **kw: place(robot, dest, **kw),
-        "go_home": lambda **kw: go_home(robot, **kw),
         "estop": estop,
         "release_estop": release_estop,
     }
+    if grasp_primitives:
+        from mj_manipulator.primitives import go_home, pickup, place
+
+        user_ns["pickup"] = lambda target=None, **kw: pickup(robot, target, **kw)
+        user_ns["place"] = lambda dest=None, **kw: place(robot, dest, **kw)
+        user_ns["go_home"] = lambda **kw: go_home(robot, **kw)
     if extra_ns:
         user_ns.update(extra_ns)
 
@@ -97,14 +107,19 @@ def start_console(
     banner = f"\n{'=' * 60}\n  {robot_name} [{mode}] | {arm_str}{viewer_str}\n"
     if viser:
         banner += "  Browser: http://localhost:8080\n"
+    banner += f"{'=' * 60}\n\n"
+    if grasp_primitives:
+        banner += (
+            "  pickup('object')  — pick up an object\n"
+            "  place('dest')     — place held object\n"
+            "  go_home()         — return to ready\n"
+        )
+    if extra_banner:
+        banner += extra_banner if extra_banner.endswith("\n") else extra_banner + "\n"
     banner += (
-        f"{'=' * 60}\n\n"
-        f"  pickup('object')  — pick up an object\n"
-        f"  place('dest')     — place held object\n"
-        f"  go_home()         — return to ready\n"
-        f"  estop()           — E-Stop: halt everything\n"
-        f"  release_estop()   — release E-Stop\n"
-        f"  robot.<tab>       — tab completion\n"
+        "  estop()           — E-Stop: halt everything\n"
+        "  release_estop()   — release E-Stop\n"
+        "  robot.<tab>       — tab completion\n"
     )
 
     # -- Viser viewer ----------------------------------------------------------
