@@ -743,8 +743,9 @@ class Arm:
                 constraint_tsrs=constraint_tsrs,
                 seed=seed,
             )
-        except PlanningError as e:
-            # Start/goal in collision or unreachable is a planning failure, not
+        except (PlanningError, ValueError) as e:
+            # Start/goal in collision or unreachable (PlanningError) or no
+            # configs provided at all (ValueError) is a planning failure, not
             # an exceptional condition — return None like "no path found" so
             # callers handle all planning failures uniformly.
             logger.info("Plan to configuration failed: %s", e)
@@ -787,7 +788,7 @@ class Arm:
                 constraint_tsrs=constraint_tsrs,
                 seed=seed,
             )
-        except PlanningError as e:
+        except (PlanningError, ValueError) as e:
             logger.info("Plan to configurations failed: %s", e)
             return None
 
@@ -833,8 +834,9 @@ class Arm:
                 seed=seed,
                 return_details=return_details,
             )
-        except PlanningError as e:
-            # All goal/start configs invalid/unreachable/in-collision is a
+        except (PlanningError, ValueError) as e:
+            # All goal/start configs invalid/unreachable/in-collision
+            # (PlanningError) or no goal TSRs provided at all (ValueError) is a
             # planning failure — return None so callers (e.g. feeding behaviors)
             # get a uniform "no plan" signal instead of an escaping exception.
             logger.info("Plan to TSRs failed: %s", e)
