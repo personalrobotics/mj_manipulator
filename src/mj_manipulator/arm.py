@@ -42,6 +42,27 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+
+def continuous_joints(model: "mujoco.MjModel", joint_names: list[str]) -> tuple[bool, ...] | None:
+    """Which joints the planner should treat as angular (continuous circles).
+
+    Only genuinely unlimited joints qualify. A limited joint is a bounded
+    interval however wide its range: the UR5e's ±2π joints can reach any
+    angle, but q and q + 2π are different joint states, and a path between
+    them is a real full rotation. Treating such joints as angular lets the
+    planner join configurations a full turn apart, and the returned path then
+    spins the joint through 360° (personalrobotics/mj_manipulator#170).
+
+    Returns:
+        Tuple of flags, one per joint, or None if no joint is continuous.
+    """
+    angular = []
+    for jname in joint_names:
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jname)
+        angular.append(jid >= 0 and not bool(model.jnt_limited[jid]))
+    return tuple(angular) if any(angular) else None
+
+
 class ArmRobotModel:
     """Adapts Arm for pycbirrt's RobotModel protocol (single-threaded).
 
@@ -605,19 +626,7 @@ class Arm:
         if config is None:
             defaults = self.config.planning_defaults
 
-            # Detect continuous joints for angular distance wrapping.
-            # A joint is continuous if unlimited OR range > 2π.
-            angular = []
-            for jname in self.config.joint_names:
-                jid = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_JOINT, jname)
-                if jid < 0:
-                    angular.append(False)
-                elif not self.env.model.jnt_limited[jid]:
-                    angular.append(True)
-                else:
-                    rng = self.env.model.jnt_range[jid]
-                    angular.append((rng[1] - rng[0]) > 2 * np.pi * 1.5)
-            angular_joints = tuple(angular) if any(angular) else None
+            angular_joints = continuous_joints(self.env.model, self.config.joint_names)
 
             config = CBiRRTConfig(
                 timeout=defaults.timeout,

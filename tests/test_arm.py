@@ -406,3 +406,59 @@ class TestPlannerFailureReturnsNone:
         )
         tsr = TSR(T0_w=np.eye(4), Tw_e=np.eye(4), Bw=np.zeros((6, 2)))
         assert arm.plan_to_tsrs([tsr]) is None
+
+
+class TestContinuousJoints:
+    """Only unlimited joints are angular; wide but limited joints stay bounded (#170)."""
+
+    XML = """
+    <mujoco>
+      <worldbody>
+        <body>
+          <joint name="unlimited" type="hinge" axis="0 0 1"/>
+          <geom type="sphere" size="0.01"/>
+          <body>
+            <joint name="wide" type="hinge" axis="0 0 1" limited="true" range="-6.2832 6.2832"/>
+            <geom type="sphere" size="0.01"/>
+            <body>
+              <joint name="narrow" type="hinge" axis="0 0 1" limited="true" range="-1 1"/>
+              <geom type="sphere" size="0.01"/>
+            </body>
+          </body>
+        </body>
+      </worldbody>
+    </mujoco>
+    """
+
+    def test_wide_limited_joint_is_not_angular(self):
+        from mj_manipulator.arm import continuous_joints
+
+        model = mujoco.MjModel.from_xml_string(self.XML)
+        assert continuous_joints(model, ["unlimited", "wide", "narrow"]) == (True, False, False)
+
+    def test_all_limited_gives_none(self):
+        from mj_manipulator.arm import continuous_joints
+
+        model = mujoco.MjModel.from_xml_string(self.XML)
+        assert continuous_joints(model, ["wide", "narrow"]) is None
+
+    def test_ur5e_joints_are_bounded(self):
+        """The menagerie UR5e has ±2π joints with limits; none should be angular."""
+        try:
+            from mj_manipulator.menagerie import menagerie_scene
+
+            scene = menagerie_scene("universal_robots_ur5e")
+        except (ImportError, FileNotFoundError):
+            pytest.skip("mujoco_menagerie not available")
+        from mj_manipulator.arm import continuous_joints
+
+        model = mujoco.MjModel.from_xml_path(str(scene))
+        joints = [
+            "shoulder_pan_joint",
+            "shoulder_lift_joint",
+            "elbow_joint",
+            "wrist_1_joint",
+            "wrist_2_joint",
+            "wrist_3_joint",
+        ]
+        assert continuous_joints(model, joints) is None
