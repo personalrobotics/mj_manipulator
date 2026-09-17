@@ -351,7 +351,8 @@ class TestPlannerFailureReturnsNone:
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(AllStartConfigurationsInCollision(1)),
         )
         assert arm.plan_to_configuration(arm.get_joint_positions()) is None
@@ -361,7 +362,8 @@ class TestPlannerFailureReturnsNone:
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(AllGoalConfigurationsInvalid(5)),
         )
         assert arm.plan_to_configurations([arm.get_joint_positions()]) is None
@@ -372,7 +374,8 @@ class TestPlannerFailureReturnsNone:
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(AllGoalConfigurationsInvalid(100)),
         )
         tsr = TSR(T0_w=np.eye(4), Tw_e=np.eye(4), Bw=np.zeros((6, 2)))
@@ -383,7 +386,8 @@ class TestPlannerFailureReturnsNone:
         # available") for an empty/absent goal — also a planning failure.
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(ValueError("No valid start configurations available")),
         )
         assert arm.plan_to_configuration(arm.get_joint_positions()) is None
@@ -391,7 +395,8 @@ class TestPlannerFailureReturnsNone:
     def test_plan_to_configurations_value_error_returns_none(self, franka_arm_at_home, monkeypatch):
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(ValueError("No valid goal configurations available")),
         )
         assert arm.plan_to_configurations([arm.get_joint_positions()]) is None
@@ -401,7 +406,8 @@ class TestPlannerFailureReturnsNone:
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
-            arm, "create_planner",
+            arm,
+            "create_planner",
             lambda config: self._RaisingPlanner(ValueError("No valid goal configurations available")),
         )
         tsr = TSR(T0_w=np.eye(4), Tw_e=np.eye(4), Bw=np.zeros((6, 2)))

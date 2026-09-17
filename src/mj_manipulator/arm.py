@@ -42,7 +42,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-
 def continuous_joints(model: "mujoco.MjModel", joint_names: list[str]) -> tuple[bool, ...] | None:
     """Which joints the planner should treat as angular (continuous circles).
 
