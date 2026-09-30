@@ -6,7 +6,7 @@
 Wraps an Environment + ArmConfig to provide:
 - State queries (joint positions, EE pose, joint limits)
 - Forward kinematics (non-destructive, for planning)
-- Motion planning via pycbirrt (config-to-config, TSR-based, pose-based)
+- Motion planning via sscbirrt (config-to-config, TSR-based, pose-based)
 
 Robot-specific code (IK solvers, grippers) is injected via protocols.
 """
@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
-from pycbirrt import CBiRRT, CBiRRTConfig
-from pycbirrt.exceptions import PlanningError
+from sscbirrt import CBiRRT, CBiRRTConfig
+from sscbirrt.exceptions import PlanningError
 from tsr import TSR
 
 from mj_manipulator.collision import CollisionChecker
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# pycbirrt RobotModel adapters
+# sscbirrt RobotModel adapters
 # =============================================================================
 
 
@@ -63,7 +63,7 @@ def continuous_joints(model: "mujoco.MjModel", joint_names: list[str]) -> tuple[
 
 
 class ArmRobotModel:
-    """Adapts Arm for pycbirrt's RobotModel protocol (single-threaded).
+    """Adapts Arm for sscbirrt's RobotModel protocol (single-threaded).
 
     Uses Arm.forward_kinematics() which creates a temporary MjData copy,
     so it's safe for planning but not thread-safe.
@@ -822,13 +822,13 @@ class Arm:
             timeout: Planning timeout in seconds (default from planning_defaults).
             seed: RNG seed for reproducibility.
             planner_config: Override planner configuration.
-            return_details: If True, return pycbirrt PlanResult with indices
+            return_details: If True, return sscbirrt PlanResult with indices
                 and stats instead of just the path.
             abort_fn: If provided, called each iteration; return True to abort.
 
         Returns:
             Path to a goal satisfying the TSRs, or None if failed.
-            If return_details=True, returns pycbirrt.PlanResult instead.
+            If return_details=True, returns sscbirrt.PlanResult instead.
         """
         if self.ik_solver is None:
             raise RuntimeError("plan_to_tsrs requires an IK solver. Pass ik_solver= to the Arm constructor.")

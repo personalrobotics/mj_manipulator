@@ -18,7 +18,7 @@ dependencies = [
     "toppra>=0.6.3",
     "py_trees>=2.2",
     "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
-    "pycbirrt @ git+https://github.com/personalrobotics/pycbirrt.git",
+    "sscbirrt @ git+https://github.com/personalrobotics/sscbirrt.git",
     "sstsr>=2.0.0",
     "eaik",
     "mink>=1.1.0",
@@ -28,7 +28,7 @@ dependencies = [
 
 [tool.uv.sources]
 mj-environment = { workspace = true }
-pycbirrt = { workspace = true }
+sscbirrt = { workspace = true }
 prl-assets = { workspace = true }
 mj-viser = { workspace = true }
 

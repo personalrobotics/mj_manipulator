@@ -45,7 +45,7 @@ class CollisionChecker:
     **Simple mode** (neither provided): No grasp awareness. Any contact
     involving the arm is a collision.
 
-    Implements pycbirrt's ``CollisionChecker`` protocol (``is_valid(q)``).
+    Implements sscbirrt's ``CollisionChecker`` protocol (``is_valid(q)``).
     """
 
     def __init__(
@@ -131,7 +131,7 @@ class CollisionChecker:
             if bid >= 0:
                 self._grasped_body_ids.update(self._get_body_and_descendants(bid))
 
-    # -- Public API (pycbirrt CollisionChecker protocol) --
+    # -- Public API (sscbirrt CollisionChecker protocol) --
 
     def is_valid(self, q: np.ndarray) -> bool:
         """Check if a configuration is collision-free.
