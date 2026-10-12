@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Siddhartha Srinivasa
 
-"""Head-to-head benchmark: EAIK (analytical) vs mink (numerical) IK.
+"""Head-to-head benchmark: the analytical IK (ssik, from the model) vs mink (numerical).
 
 Generates random reachable poses for each arm, solves with both solvers,
 and compares solve time, solution count, FK accuracy, and solution
@@ -89,9 +89,9 @@ def _build_ur5e():
     spec = mujoco.MjSpec.from_file(str(menagerie_scene("universal_robots_ur5e")))
     add_ur5e_gravcomp(spec)
     env = Environment.from_model(spec.compile())
-    arm_eaik = create_ur5e_arm(env, with_ik=True)
+    arm_analytic = create_ur5e_arm(env, with_ik=True)
     arm_bare = create_ur5e_arm(env, with_ik=False)
-    return arm_eaik, arm_bare, np.array(UR5E_HOME), "attachment_site"
+    return arm_analytic, arm_bare, np.array(UR5E_HOME), "attachment_site"
 
 
 def _build_franka():
@@ -104,9 +104,9 @@ def _build_franka():
     add_franka_ee_site(spec)
     add_franka_gravcomp(spec)
     env = Environment.from_model(spec.compile())
-    arm_eaik = create_franka_arm(env, with_ik=True)
+    arm_analytic = create_franka_arm(env, with_ik=True)
     arm_bare = create_franka_arm(env, with_ik=False)
-    return arm_eaik, arm_bare, np.array(FRANKA_HOME), "grasp_site"
+    return arm_analytic, arm_bare, np.array(FRANKA_HOME), "grasp_site"
 
 
 def _build_iiwa14():
@@ -119,9 +119,9 @@ def _build_iiwa14():
     add_iiwa14_ee_site(spec)
     add_iiwa14_gravcomp(spec)
     env = Environment.from_model(spec.compile())
-    arm_eaik = create_iiwa14_arm(env, with_ik=True)
+    arm_analytic = create_iiwa14_arm(env, with_ik=True)
     arm_bare = create_iiwa14_arm(env, with_ik=False)
-    return arm_eaik, arm_bare, np.array(IIWA14_HOME), "grasp_site"
+    return arm_analytic, arm_bare, np.array(IIWA14_HOME), "grasp_site"
 
 
 ARM_BUILDERS = {
@@ -373,17 +373,17 @@ def main() -> int:
             continue
 
         print(f"\nBuilding {arm_name}...", flush=True)
-        arm_eaik, arm_bare, home, ee_frame = ARM_BUILDERS[arm_name]()
+        arm_analytic, arm_bare, home, ee_frame = ARM_BUILDERS[arm_name]()
 
         # Generate poses once (shared between solvers)
         poses = generate_reachable_poses(arm_bare, home, args.n_poses, args.seed)
         print(f"Generated {len(poses)} reachable poses.", flush=True)
 
-        # EAIK
-        eaik_solver = arm_eaik.ik_solver
-        print("  Running EAIK...", flush=True)
-        eaik_result = benchmark_ik(arm_name, "eaik", eaik_solver, arm_bare, poses, home)
-        report.ik_results.append(eaik_result)
+        # Analytical (ssik)
+        analytic_solver = arm_analytic.ik_solver
+        print("  Running ssik...", flush=True)
+        analytic_result = benchmark_ik(arm_name, "ssik", analytic_solver, arm_bare, poses, home)
+        report.ik_results.append(analytic_result)
 
         # Mink
         from mj_manipulator.arms.mink_solver import make_mink_solver
@@ -406,17 +406,17 @@ def main() -> int:
                 continue
 
             print(f"\nBuilding {arm_name}...", flush=True)
-            arm_eaik, arm_bare, home, ee_frame = ARM_BUILDERS[arm_name]()
+            arm_analytic, arm_bare, home, ee_frame = ARM_BUILDERS[arm_name]()
 
             from mj_manipulator.arms.mink_solver import make_mink_solver
 
             mink_solver = make_mink_solver(arm_bare)
 
-            print("  Planning with EAIK...", flush=True)
-            eaik_plan = benchmark_planning(
-                arm_name, "eaik", arm_eaik, arm_eaik.ik_solver, home, args.n_plans, args.seed
+            print("  Planning with ssik...", flush=True)
+            analytic_plan = benchmark_planning(
+                arm_name, "ssik", arm_analytic, arm_analytic.ik_solver, home, args.n_plans, args.seed
             )
-            report.plan_results.append(eaik_plan)
+            report.plan_results.append(analytic_plan)
 
             print("  Planning with mink...", flush=True)
             mink_plan = benchmark_planning(arm_name, "mink", arm_bare, mink_solver, home, args.n_plans, args.seed)

@@ -140,12 +140,13 @@ def plan_cartesian_path(
     joint_path: list[np.ndarray] = [q_current]
 
     # Scripted Cartesian paths are meant to stay on a single IK branch
-    # as they go. For redundant arms with an explicit locked joint
-    # (the EAIK discretization pattern), we let the locked joint drift
+    # as they go. The default ssik solver does this for redundant arms
+    # itself: seeded with ``q_init``, it adds the solutions that continue
+    # from the seed along the pose's self-motion manifold, and the
+    # nearest is taken below. The deprecated EAIK solver instead locks a
+    # joint (``fixed_joint_index``); for it, the locked joint may drift
     # only within ``redundancy_window_rad`` of its previous value per
-    # waypoint — same per-step budget a non-redundant joint gets from
-    # the Cartesian step itself. Non-EAIK solvers (or 6-DOF arms)
-    # ignore ``discretizations`` — the call still works.
+    # waypoint.
     locked_idx = getattr(arm.ik_solver, "fixed_joint_index", None)
 
     for i, pose in enumerate(waypoints):

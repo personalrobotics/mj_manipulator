@@ -1,16 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Siddhartha Srinivasa
 
-"""Analytical IK demo with EAIK — UR5e and Franka Panda.
+"""Analytical IK demo with ssik — UR5e and Franka Panda.
 
-Showcases the MuJoCoEAIKSolver which extracts joint axes (H) and position
-offsets (P) directly from MuJoCo models to build EAIK HPRobots. No DH
-parameters or frame calibration needed — EAIK FK matches MuJoCo FK exactly.
+Showcases MuJoCoSSIKSolver.from_model, which reads joint axes (H) and position
+offsets (P) directly from the MuJoCo model and builds an ssik Manipulator. No
+DH parameters, URDF or frame calibration — its FK is MuJoCo's.
 
 Demonstrates:
-  1. Automatic kinematic extraction from MuJoCo
-  2. 6-DOF analytical IK (UR5e) — direct solve
-  3. 7-DOF IK via joint discretization (Franka) — lock joint 5
+  1. Automatic kinematic extraction from MuJoCo, and the solver ssik dispatches to
+  2. 6-DOF analytical IK (UR5e) — closed form
+  3. 7-DOF analytical IK (Franka) — closed form over the redundancy
   4. FK ↔ IK round-trip verification
   5. Multiple configurations with solution counts
 
@@ -51,27 +51,27 @@ def print_header(title):
 # Demo 1: Kinematic extraction
 # ---------------------------------------------------------------------------
 def demo_kinematics(arm, label):
-    """Show the H/P vectors extracted from MuJoCo for EAIK."""
-    solver = arm.ik_solver
+    """Show the H/P vectors extracted from MuJoCo, and the analytical solver ssik dispatched to."""
+    from mj_manipulator.arms._kinematics import _extract_hp
+
+    env = arm.env
+    first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
+    base_body_id = int(env.model.body_parentid[first_joint_body])
+    H, P, _ = _extract_hp(
+        env.model, env.data, list(arm.joint_ids), list(arm.joint_qpos_indices), arm.ee_site_id, base_body_id
+    )
     print_header(f"{label} - Kinematic Extraction ({arm.dof}-DOF)")
 
-    print(f"\n  Joint axes H ({solver.H.shape}):")
-    for i, h in enumerate(solver.H):
+    print(f"\n  Joint axes H ({H.shape}):")
+    for i, h in enumerate(H):
         print(f"    Joint {i + 1}: [{h[0]:7.4f}, {h[1]:7.4f}, {h[2]:7.4f}]")
 
-    print(f"\n  Position offsets P ({solver.P.shape}):")
-    for i, p in enumerate(solver.P):
-        label_p = f"Joint {i + 1}" if i < len(solver.H) else "EE"
+    print(f"\n  Position offsets P ({P.shape}):")
+    for i, p in enumerate(P):
+        label_p = f"Joint {i + 1}" if i < len(H) else "EE"
         print(f"    {label_p:>7s}: [{p[0]:8.5f}, {p[1]:8.5f}, {p[2]:8.5f}]")
 
-    if solver.robot is not None:
-        family = solver.robot.getKinematicFamily()
-        known = solver.robot.hasKnownDecomposition()
-        print(f"\n  Kinematic family: {family}")
-        print(f"  Known decomposition: {known}")
-    else:
-        print(f"\n  7-DOF with joint {solver.fixed_joint_index + 1} discretized")
-        print(f"  Discretization steps: {len(solver.discretize_values)}")
+    print(f"\n  ssik solver: {arm.ik_solver.solver_name}")
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ def main():
     demo_ik_configs(ur5e, ur5e_configs, "UR5e")
     demo_roundtrip(ur5e, "UR5e")
 
-    # === Franka Panda (7-DOF, joint-5 discretization) ===
+    # === Franka Panda (7-DOF, closed form over the redundancy) ===
     spec = mujoco.MjSpec.from_file(str(FRANKA_SCENE))
     add_franka_ee_site(spec)
     add_franka_gravcomp(spec)
@@ -217,9 +217,9 @@ def main():
     demo_roundtrip(franka, "Franka Panda")
 
     print_header(
-        "DONE - EAIK Analytical IK\n"
-        "  UR5e: 6-DOF direct solve\n"
-        "  Franka: 7-DOF via joint-5 discretization\n"
+        "DONE - ssik Analytical IK\n"
+        "  UR5e: 6-DOF closed form\n"
+        "  Franka: 7-DOF closed form over the redundancy\n"
         "  Kinematics extracted from MuJoCo — no DH parameters needed"
     )
     print()

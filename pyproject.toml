@@ -1,6 +1,6 @@
 [project]
 name = "mj-manipulator"
-version = "2.0.0"
+version = "2.1.0"
 description = "Generic MuJoCo manipulator control: planning, execution, grasping, and cartesian control for any robot arm"
 readme = "README.md"
 license = "MIT"
@@ -20,10 +20,9 @@ dependencies = [
     "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
     "sscbirrt>=3.6,<4",
     "sstsr>=3.4,<4",
-    "eaik",
     "mink>=1.1.0",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
-    "ssik>=1.1.0",
+    "ssik>=7,<8",
 ]
 
 [tool.uv.sources]
@@ -33,6 +32,9 @@ prl-assets = { workspace = true }
 mj-viser = { workspace = true }
 
 [project.optional-dependencies]
+eaik = [
+    "eaik",  # deprecated: with_ik="eaik" only; ssik is the IK
+]
 console = [
     "ipython>=8.0",
     "viser>=1.0",

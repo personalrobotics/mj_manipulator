@@ -328,7 +328,7 @@ def create_franka_arm(
     *,
     ee_site: str = "grasp_site",
     with_ik="auto",
-    n_discretizations: int = 16,
+    n_discretizations: int | None = None,
     tcp_offset: np.ndarray | None = None,
     gripper: Gripper | None = None,
     grasp_manager: GraspManager | None = None,
@@ -338,10 +338,12 @@ def create_franka_arm(
     Args:
         env: MuJoCo environment containing a Franka model with an EE site.
         ee_site: Name of the end-effector site in the model.
-        with_ik: IK solver mode — ``"auto"`` (EAIK, mink fallback),
-            ``"eaik"``, ``"mink"``, ``"none"``, or bool for backward
-            compat (``True`` → ``"auto"``).
-        n_discretizations: Number of joint-5 values to sample for EAIK.
+        with_ik: IK solver mode — ``"auto"`` (ssik, mink fallback),
+            ``"ssik"``, ``"mink"``, ``"none"``, or bool for backward
+            compat (``True`` → ``"auto"``). ssik solves the Panda in
+            closed form. ``"eaik"`` is deprecated.
+        n_discretizations: Deprecated; only ``with_ik="eaik"`` uses it
+            (joint-5 values to sample, default 16).
         tcp_offset: Optional 4x4 transform from ee_site to tool center point.
         gripper: Optional gripper implementation (e.g., FrankaGripper).
         grasp_manager: Optional grasp state tracker.
@@ -364,10 +366,6 @@ def create_franka_arm(
     )
 
     arm = Arm(env, config)
-    ik_solver = resolve_ik_solver(
-        arm,
-        with_ik=with_ik,
-        fixed_joint_index=_FRANKA_LOCKED_JOINT_INDEX,
-        n_discretizations=n_discretizations,
-    )
+    eaik = {"fixed_joint_index": _FRANKA_LOCKED_JOINT_INDEX} if with_ik == "eaik" else {}  # deprecated EAIK only
+    ik_solver = resolve_ik_solver(arm, with_ik=with_ik, n_discretizations=n_discretizations, **eaik)
     return Arm(env, config, ik_solver=ik_solver, gripper=gripper, grasp_manager=grasp_manager)
