@@ -562,11 +562,9 @@ def _generate_surface_place_tsrs(
     except (KeyError, TypeError):
         return []
 
-    margin = 0.05
-    placer = StablePlacer(
-        table_x=max(0.01, surface_hx - margin),
-        table_y=max(0.01, surface_hy - margin),
-    )
+    # The surface's true half-extents: sstsr (>= 3.1, #150) insets the region by the object's footprint so the whole
+    # object stays on the surface, and returns no placement when it cannot fit. A margin here would count twice.
+    placer = StablePlacer(table_x=surface_hx, table_y=surface_hy)
 
     geo_type = gp.get("type")
     if geo_type == "cylinder":
