@@ -119,19 +119,23 @@ class TestSafeRetractReachability:
             "rot_err": rot_err,
         }
 
+    # From FRANKA_HOME, a 15 cm lift with the orientation held ends 0.6 mm past the arm's reach: ssik reports no
+    # solution there, where EAIK (the former IK) returned configurations 0.6 mm off the pose. Lift 12 cm, within reach.
+    HOME_LIFT = 0.12
+
     def test_kinematic_home_reaches_target(self, franka_arm_at_home):
-        """Kinematic mode from home reaches the commanded 15 cm lift."""
-        m = self._run(franka_arm_at_home, FRANKA_HOME, physics=False)
-        assert abs(m["z_travel"] - 0.15) < 0.005  # within 5 mm
+        """Kinematic mode from home reaches the commanded lift."""
+        m = self._run(franka_arm_at_home, FRANKA_HOME, physics=False, distance=self.HOME_LIFT)
+        assert abs(m["z_travel"] - self.HOME_LIFT) < 0.005  # within 5 mm
         assert abs(m["x_drift"]) < 0.002
         assert abs(m["y_drift"]) < 0.002
         assert m["rot_err"] < 0.02
         assert abs(m["reported"] - m["z_travel"]) < 0.005
 
     def test_physics_home_reaches_target(self, franka_arm_at_home):
-        """Physics mode from home reaches the commanded 15 cm lift within tolerance."""
-        m = self._run(franka_arm_at_home, FRANKA_HOME, physics=True)
-        assert abs(m["z_travel"] - 0.15) < 0.005
+        """Physics mode from home reaches the commanded lift within tolerance."""
+        m = self._run(franka_arm_at_home, FRANKA_HOME, physics=True, distance=self.HOME_LIFT)
+        assert abs(m["z_travel"] - self.HOME_LIFT) < 0.005
         assert abs(m["x_drift"]) < 0.002
         assert abs(m["y_drift"]) < 0.002
         assert m["rot_err"] < 0.02

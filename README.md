@@ -75,10 +75,13 @@ Any path can be time-parameterized with `arm.retime(path)`, which uses TOPP-RA w
 
 ## IK Solver
 
-Uses [EAIK](https://github.com/Jonte-Raab/EAIK) for analytical inverse kinematics. The `MuJoCoEAIKSolver` extracts joint axes (H) and position offsets (P) directly from the MuJoCo model — no DH parameters or frame calibration needed.
+Uses [ssik](https://github.com/personalrobotics/ssik) for analytical inverse kinematics. `MuJoCoSSIKSolver.from_model` reads the joint axes and offsets directly from the MuJoCo model — no DH parameters, URDF or frame calibration — so the solver's forward kinematics is the model's.
 
-- **6-DOF** (e.g. UR5e): Direct analytical solve
-- **7-DOF** (e.g. Franka): Lock one joint, discretize over its range, solve 6-DOF IK at each value
+- **6-DOF** (e.g. UR5e): closed form (ikgeo).
+- **7-DOF** (e.g. Franka, iiwa): closed form over the redundancy (`seven_r` solvers), with no joint locked or discretized. Seeded with the current configuration, the solver also returns the solutions that continue from it, so Cartesian paths stay on one branch.
+- No analytical solver for the geometry: `with_ik="auto"` falls back to mink's numerical IK.
+
+EAIK, the former solver, is deprecated: `with_ik="eaik"` still works with `pip install "mj-manipulator[eaik]"` and warns.
 
 ## Cartesian Control
 
@@ -187,7 +190,7 @@ Thread-safe input methods for device callbacks. Works with SimContext (kinematic
 ```
 mj_environment  →  mj_manipulator  →  geodude (UR5e + Robotiq)
                         │
-                        ├── arms/          Arm factories + EAIK IK solver
+                        ├── arms/          Arm factories + ssik IK solver
                         ├── arm.py         Generic Arm class
                         ├── config.py      ArmConfig, KinematicLimits, PlanningDefaults
                         ├── protocols.py   IKSolver, Gripper, ExecutionContext contracts
@@ -262,49 +265,29 @@ def add_my_robot_ee_site(spec: mujoco.MjSpec, site_name: str = "grasp_site") -> 
 
 See `add_franka_ee_site()` or `add_iiwa14_ee_site()` for full examples.
 
-### Step 2 — (7-DOF only) find the EAIK locked joint
+### Step 2 — check that ssik covers your arm
 
-EAIK solves 6-DOF analytically. For 7-DOF, we lock one joint and discretize. Discover which joint to lock with a one-off script:
+IK needs no per-arm work: `with_ik="auto"` builds an ssik solver from the arm's kinematics in the live model. Check which solver it dispatched to:
 
 ```python
-from mj_manipulator.arm import Arm
-from mj_manipulator.arms.eaik_solver import _extract_hp, find_locked_joint_index
-from mj_manipulator.config import ArmConfig, KinematicLimits
-import numpy as np
-
-# Create a bare config just to extract H/P
-config = ArmConfig(
-    name="my_robot", entity_type="arm",
-    joint_names=MY_ROBOT_JOINT_NAMES,
-    kinematic_limits=KinematicLimits(velocity=np.ones(7), acceleration=np.ones(7)),
-    ee_site="grasp_site",
-)
-arm = Arm(env, config)  # no IK yet
-first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
-base_body_id     = env.model.body_parentid[first_joint_body]
-H, P, _ = _extract_hp(env.model, env.data, list(arm.joint_ids),
-                      arm.joint_qpos_indices, arm.ee_site_id, base_body_id)
-print(find_locked_joint_index(H, P))
+arm = create_my_robot_arm(env)
+print(type(arm.ik_solver).__name__, arm.ik_solver.solver_name)   # e.g. MuJoCoSSIKSolver seven_r.srs
 ```
 
-**What if it returns `None`?** Your arm's kinematics don't fit any known EAIK family (no spherical wrist, no spherical base, no parallel pairs after locking). Options:
-
-- Some arms (e.g. Kinova Gen3) are theoretically spherical but their MuJoCo XML has small residual offsets from URDF conversion. EAIK uses exact-equality checks, so a few mm of offset on the "wrong" axis breaks decomposition. You may be able to snap near-zero offsets to zero — see #126 for the discussion.
-- Some arms (e.g. Flexiv Rizon 4) are legitimately non-analytical — joints don't line up in classic ways by design. You'll need numerical IK, which mj_manipulator doesn't ship today (see #127). Pick a different arm or wait for numerical IK support.
+If ssik has no analytical solver for the geometry, `"auto"` falls back to mink's numerical IK and logs that it did.
 
 ### Step 3 — create `arms/<robot>.py`
 
 ```python
 import numpy as np
 from mj_manipulator.arm import Arm
-from mj_manipulator.arms.eaik_solver import MuJoCoEAIKSolver
+from mj_manipulator.arms._ik_factory import resolve_ik_solver
 from mj_manipulator.config import ArmConfig, KinematicLimits
 
 MY_ROBOT_JOINT_NAMES = ["joint1", "joint2", ...]
 MY_ROBOT_HOME        = np.array([0.0, 0.0, ...])
 MY_ROBOT_VEL_LIMITS  = np.array([...]) * 0.5   # datasheet values, halved
 MY_ROBOT_ACC_LIMITS  = np.array([...]) * 0.5
-_MY_ROBOT_LOCKED_JOINT = 0  # from step 2 (7-DOF only; omit for 6-DOF)
 
 
 def add_my_robot_gravcomp(spec):
@@ -313,7 +296,7 @@ def add_my_robot_gravcomp(spec):
     add_subtree_gravcomp(spec, "base")   # adjust root body name
 
 
-def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True,
+def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik="auto",
                        tcp_offset=None, gripper=None, grasp_manager=None):
     config = ArmConfig(
         name="my_robot", entity_type="arm",
@@ -325,21 +308,8 @@ def create_my_robot_arm(env, *, ee_site="grasp_site", with_ik=True,
         ee_site=ee_site,
         tcp_offset=tcp_offset,
     )
-    if not with_ik:
-        return Arm(env, config, gripper=gripper, grasp_manager=grasp_manager)
-
     arm = Arm(env, config)
-    first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
-    base_body_id = env.model.body_parentid[first_joint_body]
-    ik_solver = MuJoCoEAIKSolver(
-        model=env.model, data=env.data,
-        joint_ids=list(arm.joint_ids),
-        joint_qpos_indices=arm.joint_qpos_indices,
-        ee_site_id=arm.ee_site_id,
-        base_body_id=base_body_id,
-        joint_limits=arm.get_joint_limits(),
-        fixed_joint_index=_MY_ROBOT_LOCKED_JOINT,   # 7-DOF only
-    )
+    ik_solver = resolve_ik_solver(arm, with_ik=with_ik)   # ssik from the model, mink fallback
     return Arm(env, config, ik_solver=ik_solver, gripper=gripper, grasp_manager=grasp_manager)
 ```
 
@@ -642,7 +612,7 @@ Built-in scenarios live under `src/mj_manipulator/demos/`. Other workspace packa
 Short examples of individual APIs, at `demos/` in the repo root:
 
 ```bash
-uv run python demos/ik_solver.py         # EAIK analytical IK
+uv run python demos/ik_solver.py         # analytical IK
 uv run python demos/arm_planning.py      # CBiRRT motion planning
 uv run python demos/collision_check.py   # Collision checking modes
 ```

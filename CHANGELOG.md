@@ -1,5 +1,27 @@
 # Changelog
 
+## v2.1.0 (unreleased)
+
+### Changed
+
+- **ssik is the IK; EAIK is deprecated.**
+  - `with_ik="auto"` (the default) and `"ssik"` build an ssik solver from the arm's kinematics in the live model (`MuJoCoSSIKSolver.from_model`: joint axes and offsets at q = 0, through `ssik.Manipulator.from_axes`). Its forward kinematics is the model's, matching MuJoCo to 1e-8 on the UR5e, Panda and iiwa 14.
+  - 6-DOF arms are solved in closed form by ikgeo, and 7-DOF arms by ssik's exact `seven_r` solvers, with no joint locked or discretized.
+  - Seeded, a 7-DOF solve also returns the solutions that continue from the seed along the pose's self-motion manifold, so Cartesian paths stay on one branch.
+  - mink remains the fallback when ssik has no analytical solver for an arm.
+- **Deprecated, removed in 3.0:**
+  - `with_ik="eaik"` warns and needs the new `mj-manipulator[eaik]` extra; `eaik` is no longer a dependency;
+  - `fixed_joint_index` and `n_discretizations` (on `resolve_ik_solver` and `create_franka_arm`) warn and are ignored except under `"eaik"`;
+  - `find_locked_joint_index`.
+- **Placement no longer double-shrinks surfaces.** Placement surfaces are passed at their true size. sstsr (≥ 3.1) insets a placement region by the object's footprint, so an extra 5 cm margin counted twice and left small surfaces with no placement.
+- **Dependencies:** `sscbirrt>=3.6,<4`, `sstsr>=3.4,<4` and `ssik>=7,<8`, from PyPI.
+
+### Migrating from 2.0
+
+- **IK solutions differ.** They are exact rather than approximate, and 7-DOF arms return a different sample of their redundancy.
+- **Poses EAIK "solved" can now be unreachable.** EAIK returned approximate configurations for poses just out of reach: lifting the Panda 15 cm from `FRANKA_HOME` with fixed orientation gave configurations 0.6 mm off. ssik reports no solution for such poses.
+- **Old behaviour:** to keep EAIK for now, install `mj-manipulator[eaik]` and pass `with_ik="eaik"`.
+
 ## v2.0.0 (2026-04-17)
 
 104 commits since v1.0.0. Major additions to grasp verification, multi-arm control, perception, and gripper integration — plus a second bundled robot (KUKA iiwa 14) and diagnostic tooling for the gripper integration story.

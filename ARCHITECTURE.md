@@ -394,7 +394,7 @@ class UR5eHardwareContext:
 
 ### Phase 4: Arm class
 - Create `mj_manipulator.Arm` (generic, takes `env: Environment`)
-- Geodude's Arm becomes a thin construction wrapper that builds mj_manipulator.Arm with UR5e config + EAIK solver + Robotiq gripper
+- Geodude's Arm becomes a thin construction wrapper that builds mj_manipulator.Arm with UR5e config + ssik solver + Robotiq gripper
 - **Test**: all planning/execution tests pass
 
 ### Phase 5: Controller + SimContext (the simulation implementation)

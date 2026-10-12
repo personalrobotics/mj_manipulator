@@ -112,9 +112,9 @@ def create_ur5e_arm(
     Args:
         env: MuJoCo environment containing a UR5e model.
         ee_site: Name of the end-effector site in the model.
-        with_ik: IK solver mode — ``"auto"`` (EAIK, mink fallback),
-            ``"eaik"``, ``"mink"``, ``"none"``, or bool for backward
-            compat (``True`` → ``"auto"``).
+        with_ik: IK solver mode — ``"auto"`` (ssik, mink fallback),
+            ``"ssik"``, ``"mink"``, ``"none"``, or bool for backward
+            compat (``True`` → ``"auto"``). ``"eaik"`` is deprecated.
         tcp_offset: Optional 4x4 transform from ee_site to tool center point.
         gripper: Optional gripper implementation (e.g., RobotiqGripper).
         grasp_manager: Optional grasp state tracker.

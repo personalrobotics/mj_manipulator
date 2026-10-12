@@ -264,8 +264,8 @@ class TestFactoryDispatch:
         solver = resolve_ik_solver(arm, with_ik="auto", ssik_module=jaco2_ik)
         assert type(solver).__name__ == "MuJoCoSSIKSolver"
 
-    def test_auto_falls_to_mink_when_eaik_refuses_and_no_ssik(self, jaco2_setup):
-        """JACO 2: EAIK refuses, no ssik module → legacy mink fallback."""
+    def test_auto_builds_ssik_from_the_model_without_a_module(self, jaco2_setup):
+        """JACO 2 with no ssik module: "auto" builds ssik from the live model, not mink."""
         env, _, qpos, ee_id, _ = jaco2_setup
         from mj_manipulator.arm import Arm
         from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
@@ -292,9 +292,32 @@ class TestFactoryDispatch:
         arm = Arm(env, cfg)
 
         solver = resolve_ik_solver(arm, with_ik="auto")
+        assert type(solver).__name__ == "MuJoCoSSIKSolver"
+
+    def test_auto_falls_to_mink_when_ssik_cannot_build(self, jaco2_setup, monkeypatch):
+        """When ssik cannot be built for an arm, "auto" falls back to mink."""
+        from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
+
+        def refuse(*args, **kwargs):
+            raise ValueError("no decomposition")
+
+        monkeypatch.setattr(MuJoCoSSIKSolver, "from_model", classmethod(lambda cls, *a, **k: refuse()))
+        env, _, _, _, _ = jaco2_setup
+        from mj_manipulator.arm import Arm
+        from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
+
+        cfg = ArmConfig(
+            name="jaco2",
+            entity_type="arm",
+            joint_names=[f"j2n6s200_joint_{i}" for i in range(1, 7)],
+            kinematic_limits=KinematicLimits(velocity=np.full(6, 1.5), acceleration=np.full(6, 3.0)),
+            ee_site="ee_site",
+            planning_defaults=PlanningDefaults(),
+        )
+        solver = resolve_ik_solver(Arm(env, cfg), with_ik="auto")
         assert type(solver).__name__ == "MinkIKSolver"
 
-    def test_ssik_mode_requires_module(self, jaco2_setup):
+    def test_ssik_mode_builds_from_the_model_without_a_module(self, jaco2_setup):
         env, _, _, _, _ = jaco2_setup
         from mj_manipulator.arm import Arm
         from mj_manipulator.config import ArmConfig, KinematicLimits, PlanningDefaults
@@ -319,5 +342,4 @@ class TestFactoryDispatch:
             planning_defaults=PlanningDefaults(),
         )
         arm = Arm(env, cfg)
-        with pytest.raises(ValueError, match="requires an ssik_module"):
-            resolve_ik_solver(arm, with_ik="ssik")
+        assert type(resolve_ik_solver(arm, with_ik="ssik")).__name__ == "MuJoCoSSIKSolver"

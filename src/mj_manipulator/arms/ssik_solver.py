@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Siddhartha Srinivasa
 
-"""ssik-based analytical IK solver for MuJoCo manipulators.
+"""ssik-based analytical IK solver for MuJoCo manipulators: mj_manipulator's IK.
 
-Wraps a per-arm ``ssik`` artifact module (e.g. ``ssik.prebuilt.jaco2_ik``)
-and presents the :class:`~mj_manipulator.protocols.IKSolver` surface so the
-factory can dispatch ``ssik`` between EAIK (preferred when it has a known
-decomposition for the arm) and mink (numerical fallback). See ssik for
-algorithmic background and the per-arm coverage table.
+Two ways to build one:
+
+- :meth:`MuJoCoSSIKSolver.from_model` reads the arm's kinematics from the live MuJoCo model (joint axes and offsets at
+  q = 0) and builds an ``ssik.Manipulator`` from them, so the solver's FK is the model's. 6R arms dispatch to ikgeo;
+  7R arms (Franka, iiwa) to ssik's exact 7R solvers, with no joint locked or discretized. This is what
+  ``with_ik="auto"`` and ``"ssik"`` use.
+- The constructor wraps any object with ``solve``, ``fk`` and ``DOF`` (or ``dof``): a per-arm ``ssik`` artifact
+  module such as ``ssik.prebuilt.jaco2_ik``, or an ``ssik.Manipulator``.
 
 Usage::
 
@@ -35,6 +38,11 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
+
+
+def _dof(solver) -> int:
+    """Joint count of an ssik artifact module (``DOF``) or ``Manipulator`` (``dof``)."""
+    return int(getattr(solver, "DOF", None) or getattr(solver, "dof"))
 
 
 def _read_body_pose(data: mujoco.MjData, body_id: int) -> np.ndarray:
@@ -98,7 +106,7 @@ class MuJoCoSSIKSolver:
         respect_limits: bool = True,
         allow_refinement: bool = False,
     ):
-        if not hasattr(ssik_module, "solve") or not hasattr(ssik_module, "fk"):
+        if not hasattr(ssik_module, "solve") or not hasattr(ssik_module, "fk"):  # a module or a Manipulator
             raise TypeError(
                 f"ssik_module {ssik_module!r} must expose .solve and .fk (see ssik artifact modules in ssik.prebuilt)."
             )
@@ -113,7 +121,7 @@ class MuJoCoSSIKSolver:
         self._respect_limits = respect_limits
         self._allow_refinement = allow_refinement
 
-        dof = int(getattr(ssik_module, "DOF"))
+        dof = _dof(ssik_module)
         if len(self._joint_qpos_indices) != dof:
             raise ValueError(
                 f"ssik artifact has DOF={dof} but joint_qpos_indices has length {len(self._joint_qpos_indices)}."
@@ -159,7 +167,10 @@ class MuJoCoSSIKSolver:
             respect_limits=self._respect_limits,
             allow_refinement=self._allow_refinement,
         )
-        return [np.asarray(s.q, dtype=float) for s in sols]
+        out = [np.asarray(s.q, dtype=float) for s in sols]
+        if q_seed is not None:
+            out = self._with_seed_continuations(T_target_ssik, q_seed, out)
+        return out
 
     def solve_valid(
         self,
@@ -187,17 +198,90 @@ class MuJoCoSSIKSolver:
 
     @property
     def dof(self) -> int:
-        """Number of joints in the artifact."""
-        return int(getattr(self._mod, "DOF"))
+        """Number of joints."""
+        return _dof(self._mod)
 
     @property
     def solver_name(self) -> str:
         """The ssik dispatcher's solver name (e.g. ``ikgeo.three_parallel``)."""
-        return getattr(self._mod, "SOLVER_NAME", "ssik")
+        return getattr(self._mod, "SOLVER_NAME", None) or getattr(self._mod, "solver_name", "ssik")
+
+    @classmethod
+    def from_model(
+        cls,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        joint_ids: Sequence[int],
+        joint_qpos_indices: Sequence[int] | np.ndarray,
+        ee_site_id: int,
+        base_body_id: int,
+        joint_limits: tuple[np.ndarray, np.ndarray] | None = None,
+    ) -> MuJoCoSSIKSolver:
+        """An SSIK solver whose kinematics are read from the live model: no artifact, no geometry mismatch.
+
+        The joint axes and offsets at q = 0 (``_extract_hp``) build an ``ssik.Manipulator`` via ``from_axes``, which
+        dispatches to the arm's analytical solver. The end-effector site's fixed offset is then fitted against
+        MuJoCo's FK by the constructor; since both FKs come from the same model, the fit is exact.
+        """
+        import ssik
+
+        from mj_manipulator.arms._kinematics import _extract_hp
+
+        H, P, _ = _extract_hp(model, data, list(joint_ids), list(joint_qpos_indices), ee_site_id, base_body_id)
+        limits = None if joint_limits is None else np.column_stack([joint_limits[0], joint_limits[1]])
+        manipulator = ssik.Manipulator.from_axes(H, P, limits=limits)
+        return cls(
+            manipulator,
+            model=model,
+            data=data,
+            joint_qpos_indices=joint_qpos_indices,
+            ee_site_id=ee_site_id,
+            base_body_id=base_body_id,
+            joint_limits=joint_limits,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _with_seed_continuations(self, T_target: np.ndarray, q_seed: np.ndarray, sols: list[np.ndarray]):
+        """On a redundant (7R) arm, add the solutions at the seed's own redundancy coordinate, nearest first.
+
+        ssik samples a 7R pose's one-parameter family of solutions; the sample need not include a point near the seed,
+        so a seeded caller (a Cartesian path, teleop) would jump. The pose's self-motion manifold, evaluated at the
+        seed's coordinate (``param_of``: joint 6 for the Panda's family, the elbow swivel for SRS arms like the iiwa),
+        gives the branches that continue from the seed. 6R arms and modules without charts are returned unchanged.
+        """
+        self_motion = getattr(self._mod, "self_motion", None)
+        if self_motion is None or _dof(self._mod) < 7:
+            return sols
+        try:
+            manifold = self_motion(T_target)
+        except NotImplementedError:
+            return sols
+        t = manifold.param_of(q_seed)
+        extra = []
+        for chart in manifold.charts:
+            if chart.contains(t):
+                q = np.asarray(chart.q(t), dtype=float)
+                q = q_seed + (q - q_seed + np.pi) % (2 * np.pi) - np.pi  # charts wrap to +-pi: take the seed's winding
+                if np.all(np.isfinite(q)) and self._within_limits(q):
+                    extra.append(q)
+
+        def distance(q: np.ndarray) -> float:
+            return float(np.max(np.abs((q - q_seed + np.pi) % (2 * np.pi) - np.pi)))
+
+        merged: list[np.ndarray] = []
+        for q in sorted(extra + sols, key=distance):
+            if not any(np.allclose(q, m, atol=1e-9) for m in merged):
+                merged.append(q)
+        return merged
+
+    def _within_limits(self, q: np.ndarray) -> bool:
+        if self._joint_limits is None or not self._respect_limits:
+            return True
+        lo, hi = self._joint_limits
+        return bool(np.all(q >= lo) and np.all(q <= hi))
 
     def _read_q(self) -> np.ndarray:
         return self._data.qpos[self._joint_qpos_indices].copy()

@@ -3,17 +3,23 @@
 
 """Shared logic for resolving IK solvers in arm factories.
 
-Handles the ``with_ik`` parameter (``"auto"`` / ``"eaik"`` / ``"ssik"`` /
-``"mink"`` / ``"none"`` / bool) and the EAIK → ssik → mink fallback
-chain: EAIK is preferred where it has an analytical decomposition,
-ssik picks up arms whose geometry EAIK refuses (non-Pieper 6R, every
-7R class), and mink is the last-resort numerical fallback for arms
-neither analytical solver covers (or when no ssik artifact is wired).
+Handles the ``with_ik`` parameter (``"auto"`` / ``"ssik"`` / ``"mink"`` /
+``"none"`` / bool, and the deprecated ``"eaik"``) and the ssik → mink
+fallback chain. ssik is the analytical IK: built from the live model's
+kinematics (or from a per-arm artifact when one is given), it covers 6R
+arms and 7R arms (Franka, iiwa) in closed form. mink is the numerical
+fallback for arms ssik does not cover.
+
+EAIK is deprecated (it handled 7R arms by locking one joint and sweeping
+it): ``with_ik="eaik"`` still works when ``eaik`` is installed
+(``mj-manipulator[eaik]``) and warns; it will be removed in the next major
+release.
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -31,7 +37,7 @@ def resolve_ik_solver(
     with_ik: IKMode,
     *,
     fixed_joint_index: int | None = None,
-    n_discretizations: int = 16,
+    n_discretizations: int | None = None,
     ssik_module=None,
 ) -> "IKSolver | None":
     """Build the right IK solver for an arm based on ``with_ik``.
@@ -41,14 +47,16 @@ def resolve_ik_solver(
 
     Args:
         arm: A bare Arm (no IK yet) — used to read joint indices/limits.
-        with_ik: ``"auto"`` (default), ``"eaik"``, ``"ssik"``, ``"mink"``,
-            ``"none"``, or bool for backward compat (``True`` → ``"auto"``).
-        fixed_joint_index: For EAIK on 7-DOF arms, which joint to lock.
-        n_discretizations: Discretization count for EAIK on 7-DOF arms.
-        ssik_module: Per-arm ``ssik`` artifact module (e.g.
-            ``ssik.prebuilt.jaco2_ik``). Required when ``with_ik="ssik"``
-            or whenever the ``"auto"`` chain reaches the ssik step;
-            ``None`` skips ssik in ``"auto"`` and falls through to mink.
+        with_ik: ``"auto"`` (default: ssik, then mink), ``"ssik"``,
+            ``"mink"``, ``"none"``, or bool for backward compat
+            (``True`` → ``"auto"``). ``"eaik"`` is deprecated.
+        fixed_joint_index: Deprecated; only ``"eaik"`` uses it (which joint
+            of a 7-DOF arm to lock). Ignored, with a warning, otherwise.
+        n_discretizations: Deprecated; only ``"eaik"`` uses it (default 16).
+            Ignored, with a warning, otherwise.
+        ssik_module: Optional per-arm ``ssik`` artifact module (e.g.
+            ``ssik.prebuilt.jaco2_ik``). ``None`` builds the ssik solver
+            from the live model's kinematics.
 
     Returns:
         An IKSolver, or None if ``with_ik="none"`` or all attempted
@@ -64,35 +72,35 @@ def resolve_ik_solver(
         return None
 
     if with_ik == "eaik":
-        return _make_eaik(arm, fixed_joint_index, n_discretizations)
+        warnings.warn(
+            "with_ik='eaik' is deprecated and will be removed in the next major release; ssik is the analytical IK "
+            "(with_ik='auto' or 'ssik'), and solves 7-DOF arms in closed form.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return _make_eaik(arm, fixed_joint_index, 16 if n_discretizations is None else n_discretizations)
+
+    if fixed_joint_index is not None or n_discretizations is not None:
+        warnings.warn(
+            "fixed_joint_index and n_discretizations are deprecated: only with_ik='eaik' used them (ssik solves "
+            "7-DOF arms without locking a joint). They are ignored.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
     if with_ik == "ssik":
-        if ssik_module is None:
-            raise ValueError("with_ik='ssik' requires an ssik_module (e.g. ssik.prebuilt.<arm>_ik). Got None.")
         return _make_ssik(arm, ssik_module)
 
     if with_ik == "mink":
         return _make_mink(arm)
 
-    # "auto": try EAIK → ssik → mink in order.
-    eaik = _try_eaik(arm, fixed_joint_index, n_discretizations)
-    if eaik is not None:
-        logger.debug("Using EAIK analytical IK for '%s'.", arm.config.name)
-        return eaik
+    # "auto": ssik, then mink.
+    ssik = _try_ssik(arm, ssik_module)
+    if ssik is not None:
+        logger.debug("Using ssik analytical IK (%s) for '%s'.", ssik.solver_name, arm.config.name)
+        return ssik
 
-    if ssik_module is not None:
-        ssik = _try_ssik(arm, ssik_module)
-        if ssik is not None:
-            logger.info(
-                "EAIK has no decomposition for '%s'; using ssik analytical IK.",
-                arm.config.name,
-            )
-            return ssik
-
-    logger.info(
-        "EAIK has no decomposition for '%s' and no ssik artifact wired; falling back to mink numerical IK.",
-        arm.config.name,
-    )
+    logger.info("ssik does not cover '%s'; falling back to mink numerical IK.", arm.config.name)
     return _make_mink(arm)
 
 
@@ -125,34 +133,23 @@ def _make_eaik(arm, fixed_joint_index, n_discretizations):
     return MuJoCoEAIKSolver(**kwargs)
 
 
-def _try_eaik(arm, fixed_joint_index, n_discretizations):
-    """Try EAIK — return solver if it has a known decomposition, else None."""
-    try:
-        solver = _make_eaik(arm, fixed_joint_index, n_discretizations)
-    except Exception as e:
-        logger.debug("EAIK construction failed for '%s': %s", arm.config.name, e)
-        return None
-
-    # For 6-DOF (no fixed joint): check if EAIK recognizes the kinematics.
-    if fixed_joint_index is None and solver.robot is not None:
-        if not solver.robot.hasKnownDecomposition():
-            logger.debug(
-                "EAIK has no known decomposition for '%s' (family: %s).",
-                arm.config.name,
-                solver.robot.getKinematicFamily(),
-            )
-            return None
-
-    return solver
-
-
-def _make_ssik(arm, ssik_module):
+def _make_ssik(arm, ssik_module=None):
     from mj_manipulator.arms.ssik_solver import MuJoCoSSIKSolver
 
     env = arm.env
     first_joint_body = env.model.jnt_bodyid[arm.joint_ids[0]]
     base_body_id = int(env.model.body_parentid[first_joint_body])
 
+    if ssik_module is None:  # kinematics from the live model
+        return MuJoCoSSIKSolver.from_model(
+            env.model,
+            env.data,
+            joint_ids=list(arm.joint_ids),
+            joint_qpos_indices=arm.joint_qpos_indices,
+            ee_site_id=arm.ee_site_id,
+            base_body_id=base_body_id,
+            joint_limits=arm.get_joint_limits(),
+        )
     return MuJoCoSSIKSolver(
         ssik_module=ssik_module,
         model=env.model,
@@ -164,7 +161,7 @@ def _make_ssik(arm, ssik_module):
     )
 
 
-def _try_ssik(arm, ssik_module):
+def _try_ssik(arm, ssik_module=None):
     """Try ssik — return solver if construction succeeds, else None."""
     try:
         return _make_ssik(arm, ssik_module)

@@ -150,9 +150,10 @@ def create_iiwa14_arm(
         ee_site: Name of the end-effector site. Use the default when
             the arm has a bare ``grasp_site`` on link7; override when
             a gripper has been attached and brings its own grasp site.
-        with_ik: IK solver mode — ``"auto"`` (EAIK, mink fallback),
-            ``"eaik"``, ``"mink"``, ``"none"``, or bool for backward
-            compat (``True`` → ``"auto"``).
+        with_ik: IK solver mode — ``"auto"`` (ssik, mink fallback),
+            ``"ssik"``, ``"mink"``, ``"none"``, or bool for backward
+            compat (``True`` → ``"auto"``). ssik solves the iiwa in
+            closed form. ``"eaik"`` is deprecated.
         tcp_offset: Optional 4×4 transform from ``ee_site`` to the TCP.
         gripper: Optional gripper implementation.
         grasp_manager: Optional grasp state tracker.
@@ -175,9 +176,6 @@ def create_iiwa14_arm(
     )
 
     arm = Arm(env, config)
-    ik_solver = resolve_ik_solver(
-        arm,
-        with_ik=with_ik,
-        fixed_joint_index=_IIWA14_LOCKED_JOINT_INDEX,
-    )
+    eaik = {"fixed_joint_index": _IIWA14_LOCKED_JOINT_INDEX} if with_ik == "eaik" else {}  # deprecated EAIK only
+    ik_solver = resolve_ik_solver(arm, with_ik=with_ik, **eaik)
     return Arm(env, config, ik_solver=ik_solver, gripper=gripper, grasp_manager=grasp_manager)
