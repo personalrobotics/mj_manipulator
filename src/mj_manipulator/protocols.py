@@ -301,7 +301,7 @@ class Gripper(Protocol):
 class IKSolver(Protocol):
     """Protocol for inverse kinematics solvers.
 
-    Mirrors pycbirrt's IKSolver protocol. Each robot provides its own
+    Mirrors sscbirrt's IKSolver protocol. Each robot provides its own
     solver (analytical for UR5e/Franka, numerical for others).
     """
 

@@ -65,7 +65,7 @@ mj_manipulator/
     trajectory.py       # Trajectory + TOPP-RA + linear trajectory
     planning.py         # PlanResult dataclass
     arm.py              # Generic Arm (FK, IK, planning, execution)
-    adapters.py         # pycbirrt RobotModel/IKSolver/CollisionChecker adapters
+    adapters.py         # sscbirrt RobotModel/IKSolver/CollisionChecker adapters
     collision.py        # Unified grasp-aware CollisionChecker
     grasp_manager.py    # GraspManager + find_contacted_object
     cartesian.py        # QP solver, twist control, move_until_touch, execute_twist
@@ -138,7 +138,7 @@ class GraspSource(Protocol):
     def get_place_destinations(self, object_name: str) -> list[str]: ...
 
 class IKSolver(Protocol):
-    """Mirrors pycbirrt's IKSolver protocol."""
+    """Mirrors sscbirrt's IKSolver protocol."""
     def solve(self, pose, q_init=None) -> list[np.ndarray]: ...
     def solve_valid(self, pose, q_init=None) -> list[np.ndarray]: ...
 ```
@@ -502,10 +502,10 @@ cd mj_manipulator && uv run python demos/sim_context.py
 - `src/geodude/robot.py` (882 lines) — slim down to construction + wiring
 - `src/geodude/affordances.py` (392 lines) — stays, implements GraspSource
 
-**pycbirrt (read-only reference):**
-- `src/pycbirrt/interfaces/robot_model.py` — RobotModel protocol
-- `src/pycbirrt/interfaces/ik_solver.py` — IKSolver protocol
-- `src/pycbirrt/interfaces/collision_checker.py` — CollisionChecker protocol
+**sscbirrt (read-only reference):**
+- `src/sscbirrt/interfaces/robot_model.py` — RobotModel protocol
+- `src/sscbirrt/interfaces/ik_solver.py` — IKSolver protocol
+- `src/sscbirrt/interfaces/collision_checker.py` — CollisionChecker protocol
 
 **mj_environment (read-only reference):**
 - `mj_environment/environment.py` — Environment.fork(), model, data

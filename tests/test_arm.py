@@ -173,7 +173,7 @@ class TestForwardKinematics:
 
 
 class TestAdapters:
-    """Tests for pycbirrt RobotModel adapters."""
+    """Tests for sscbirrt RobotModel adapters."""
 
     def test_arm_robot_model(self, ur5e_arm):
         """ArmRobotModel delegates to Arm correctly."""
@@ -233,7 +233,7 @@ class TestAdapters:
 
 
 class TestPlanning:
-    """Tests for motion planning via pycbirrt."""
+    """Tests for motion planning via sscbirrt."""
 
     def test_plan_to_configuration(self, ur5e_arm):
         """Plan from home to a nearby configuration."""
@@ -347,7 +347,7 @@ class TestPlannerFailureReturnsNone:
             raise self._exc
 
     def test_plan_to_configuration_returns_none(self, franka_arm_at_home, monkeypatch):
-        from pycbirrt.exceptions import AllStartConfigurationsInCollision
+        from sscbirrt.exceptions import AllStartConfigurationsInCollision
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
@@ -358,7 +358,7 @@ class TestPlannerFailureReturnsNone:
         assert arm.plan_to_configuration(arm.get_joint_positions()) is None
 
     def test_plan_to_configurations_returns_none(self, franka_arm_at_home, monkeypatch):
-        from pycbirrt.exceptions import AllGoalConfigurationsInvalid
+        from sscbirrt.exceptions import AllGoalConfigurationsInvalid
 
         arm = franka_arm_at_home
         monkeypatch.setattr(
@@ -369,7 +369,7 @@ class TestPlannerFailureReturnsNone:
         assert arm.plan_to_configurations([arm.get_joint_positions()]) is None
 
     def test_plan_to_tsrs_returns_none(self, franka_arm_at_home, monkeypatch):
-        from pycbirrt.exceptions import AllGoalConfigurationsInvalid
+        from sscbirrt.exceptions import AllGoalConfigurationsInvalid
         from tsr.tsr import TSR
 
         arm = franka_arm_at_home
