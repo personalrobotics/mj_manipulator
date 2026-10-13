@@ -22,7 +22,7 @@ dependencies = [
     "sstsr>=3.4,<4",
     "mink>=1.1.0",
     "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
-    "ssik>=7,<8",
+    "ssik>=8.2,<9",
 ]
 
 [tool.uv.sources]
