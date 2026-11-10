@@ -97,10 +97,13 @@ Where `length` is either the actuator tendon length (Robotiq 2-finger via `tendo
 
 | Gripper | gain[0] | bias[0] | bias[1] | bias[2] | forcerange | ctrlrange |
 |---|---|---|---|---|---|---|
-| Robotiq 2F-85/2F-140 | 0.3137 | 0 | −100 | −10 | [−5, +5] | [0, 255] |
+| Robotiq 2F-85 (menagerie) | 0.3137 | 0 | −100 | −10 | [−5, +5] | [0, 255] |
+| Robotiq 2F-140 (geodude_assets) | 2.7451 | 0 | −1000 | −300 | [−6.3, +6.3] | [0, 255] |
 | Franka hand | (scaled) | some | negative | (damping) | (bounded) | [0, 255] |
 
-For the Robotiq case, at `ctrl = 255` (full-close command):
+The 2F-85's tendon is 0.80 long at full close; the 2F-140's is 0.7, its driver travel, where its pads meet (personalrobotics/geodude_assets#48). The 2F-140's servo is stiff: it pushes at its full 6.3 until within about 0.006 of its target (personalrobotics/geodude_assets#38, #49).
+
+For the 2F-85, at `ctrl = 255` (full-close command):
 
 | `length` | `0.3137 · 255` | `−100 · length` | Unclamped F | Clamped F (±5) |
 |---|---|---|---|---|
@@ -117,7 +120,7 @@ If the object *slips through the jaws*, the fingers travel past their object-blo
 
 If the object then rolls back between the fingers, the gripper *has no restoring force* — it sits open, finger-apart, with zero closing torque. Cans fall out. Empty-close states never settle.
 
-The second problem is the peak force itself. The `forcerange="-5 5"` clamp caps tendon force at 5 N, which on the 2F-85 and 2F-140 yields roughly 100 N and 90 N of pad force respectively (measured; see benchmark below). The real Robotiq 2F-85 spec is 20–235 N. We're at the low end, leaving no headroom for transport accelerations.
+The second problem is the peak force itself. The `forcerange="-5 5"` clamp caps tendon force at 5 N, which on the 2F-85 and on the 2F-140's earlier, menagerie-style actuator yielded roughly 100 N and 90 N of pad force respectively (measured; see benchmark below). The real Robotiq 2F-85 spec is 20–235 N. We're at the low end, leaving no headroom for transport accelerations.
 
 ### The fix
 
@@ -160,7 +163,7 @@ When the 2F-85 grip fix landed, the expectation was "more grip force = holds bet
 |---|---|---|---|---|---|
 | 2F-85 | stock | 5.0 | 100 | 20× | 6 |
 | 2F-85 | fixed (15 N) | 15.1 | 300 | 20× | 6 |
-| 2F-140 | stock | 5.0 | 90 | 18× | 4 |
+| 2F-140 | stock (earlier menagerie-style actuator) | 5.0 | 90 | 18× | 4 |
 | 2F-140 | fixed (15 N) | 14.7 | 195 | 13× | 4 |
 
 Two surprises:
@@ -172,7 +175,7 @@ Two surprises:
 ### Consequences
 
 - The 2F-85 needs both the grip-force fix *and* larger pads (or higher-friction pads) to match 2F-140's reliability. For now we have the force fix only; an `add_robotiq_pad_friction` helper analogous to [`add_franka_pad_friction`](../src/mj_manipulator/arms/franka.py) is a reasonable follow-up.
-- The 2F-140 has the same actuator bug as the 2F-85 (force → 0 at full close). It's latent because the larger pads mean cans never slip enough to trigger it. Fixing anyway for hygiene is tracked as [personalrobotics/geodude#189](https://github.com/personalrobotics/geodude/issues/189).
+- The 2F-140's actuator has the same form as the 2F-85's (force → 0 at full close), but geodude_assets now gives it a stiff servo whose full close targets 0.7, where its pads meet, so the force fades only once the fingers have closed on nothing. It was latent anyway because the larger pads mean cans never slip enough to trigger it; see [personalrobotics/geodude#189](https://github.com/personalrobotics/geodude/issues/189).
 
 ## 4. Diagnostic workflow
 
