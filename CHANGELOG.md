@@ -1,5 +1,9 @@
 # Changelog
 
+## Deprecated
+
+mj_manipulator is being retired (#182). The README maps each of its capabilities to its successor in ssrobot, ssgrasping, sscbirrt, ssik, sstsr, mj_viser, or the robot's own application. It receives no new features or maintenance, and is archived once nothing in the robot-code workspace imports it.
+
 ## v2.1.0 (unreleased)
 
 ### Changed

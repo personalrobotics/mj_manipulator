@@ -1,5 +1,20 @@
 # mj_manipulator
 
+> **Deprecated.** mj_manipulator is being retired ([#182](https://github.com/personalrobotics/mj_manipulator/issues/182)) and receives no new features or maintenance. Its last consumers are moving off it: Geodude 4.0 replaces the 3.x application at its cutover ([geodude#212](https://github.com/personalrobotics/geodude/issues/212)), and ADA follows. Once nothing in the robot-code workspace imports it, its final state is tagged and the repository is archived. New work belongs in its successors:
+>
+> | mj_manipulator | Successor |
+> | --- | --- |
+> | Arm factories, robot and gripper constants (`arms/`, `grippers/`, `robot.py`) | Portable robot packages authored from MJCF or URDF in [ssrobot](https://github.com/personalrobotics/ssrobot), such as `geodude_assets` |
+> | Planning, IK, and retiming (`Arm.plan_to_*`, `retime`) | ssrobot's planning contracts, through [sscbirrt](https://github.com/personalrobotics/sscbirrt) (planning and timing), [ssik](https://github.com/personalrobotics/ssik), and [sstsr](https://github.com/personalrobotics/sstsr) |
+> | Execution contexts, controllers, and trajectories (`sim_context.py`, `executor.py`, `trajectory.py`) | ssrobot's runtimes and `RobotContext`, with MuJoCo through `ssrobot.mujoco` |
+> | Grasp-aware collision (`grasp_manager.py`, `collision.py`) | ssrobot's attachments and planning scenes |
+> | Grasping, placing, verification, safe retract, primitives, and behavior-tree nodes | Robot-neutral skills in [ssgrasping](https://github.com/personalrobotics/ssgrasping): grasp, place, drop, retract, and guarded moves, with their outcomes |
+> | Cartesian control and force-guarded motion | ssrobot's guarded commands and ssgrasping's guarded moves |
+> | Viewer, console, and HUD | [mj_viser](https://github.com/personalrobotics/mj_viser) and its ssrobot integration, ssmjviser |
+> | Scenarios and demos | Each robot's application, such as Geodude 4.0 (`geodude/v4`) |
+> | Hardware (mj_manipulator_ros) | ssrobot's hardware runtimes (planned) |
+> | Teleoperation | Not scheduled |
+
 Generic MuJoCo manipulator control: planning, execution, grasping, and cartesian control for any robot arm.
 
 ## Supported Robots
