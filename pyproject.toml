@@ -17,11 +17,11 @@ dependencies = [
     "scipy",
     "toppra>=0.6.3",
     "py_trees>=2.2",
-    "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git",
+    "mj-environment @ git+https://github.com/personalrobotics/mj_environment.git@58f6a49c89c54b70258575419489a7cf7a79d354",  # the commit v2.1.0 was verified with
     "sscbirrt>=3.6,<4",
     "sstsr>=3.4,<4",
     "mink>=1.1.0",
-    "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git",
+    "prl-assets @ git+https://github.com/personalrobotics/prl_assets.git@6b5cc8d029e97264c59e61631f437e5999b671fa",  # the commit v2.1.0 was verified with
     "ssik>=8.2,<9",
 ]
 
