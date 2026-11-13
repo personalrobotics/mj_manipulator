@@ -12,7 +12,7 @@
 > | Cartesian control and force-guarded motion | ssrobot's guarded commands and ssgrasping's guarded moves |
 > | Viewer, console, and HUD | [mj_viser](https://github.com/personalrobotics/mj_viser) and its ssrobot integration, ssmjviser |
 > | Scenarios and demos | Each robot's application: [Geodude 4.0](https://github.com/personalrobotics/geodude) and [ada_mj](https://github.com/personalrobotics/ada_mj) |
-> | Hardware (mj_manipulator_ros, also retired) | ssrobot's hardware milestone: [ssrobot#35](https://github.com/personalrobotics/ssrobot/issues/35), [#36](https://github.com/personalrobotics/ssrobot/issues/36), [#38](https://github.com/personalrobotics/ssrobot/issues/38), [#40](https://github.com/personalrobotics/ssrobot/issues/40) |
+> | Hardware (mj_manipulator_ros, also retired) | ssrobot's hardware milestone (planned): [ssrobot#35](https://github.com/personalrobotics/ssrobot/issues/35), [#36](https://github.com/personalrobotics/ssrobot/issues/36), [#38](https://github.com/personalrobotics/ssrobot/issues/38), [#40](https://github.com/personalrobotics/ssrobot/issues/40) |
 > | Teleoperation | Not scheduled |
 
 Generic MuJoCo manipulator control: planning, execution, grasping, and cartesian control for any robot arm.
@@ -29,17 +29,7 @@ Bundled demos for Franka (with its built-in hand) and iiwa 14 (with a menagerie 
 
 ## Installation
 
-```bash
-uv add mj-manipulator
-```
-
-For development:
-```bash
-git clone <repo-url> mj_manipulator
-cd mj_manipulator
-uv sync --extra dev
-uv run pytest tests/ -v
-```
+mj-manipulator is not on PyPI. Install the final release from git, as the notice above says. The repository is archived, so it takes no pull requests.
 
 ## Quick Start
 
